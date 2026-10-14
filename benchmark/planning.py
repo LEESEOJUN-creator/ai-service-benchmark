@@ -78,6 +78,7 @@ def build_plan(root, config_path="config/benchmark.json"):
     if len(services) < 2 or len(set(services)) != len(services):
         raise ValueError("서로 다른 서비스 2개 이상이 필요합니다")
     index_items([{"id": service} for service in services])
+    fixture_services = {service for model in models for service in model.get("services", services)}
     repetitions = config["repetitions"]
     if type(repetitions) is not int or repetitions < 1:
         raise ValueError("반복 횟수는 1 이상의 정수여야 합니다")
@@ -107,7 +108,7 @@ def build_plan(root, config_path="config/benchmark.json"):
             if (fixture.get("classification") not in {"public", "nonpersonal_work"}
                     or fixture.get("review_status") != "approved" or not fixture.get("review_note")):
                 blockers.append(fixture_id + ": 비개인 자료 검토 미완료")
-            if not set(services).issubset(set(fixture.get("allowed_services", []))):
+            if not fixture_services.issubset(set(fixture.get("allowed_services", []))):
                 blockers.append(fixture_id + ": 업로드 대상 미확인")
             path = project_path(root, fixture["path"])
             if not path.is_file():
@@ -123,7 +124,24 @@ def build_plan(root, config_path="config/benchmark.json"):
                        "files": hashes})
     turns_per_repeat = sum(len(c["turns"]) for c in cases)
     requests_per_model_service = repetitions * turns_per_repeat
-    request_count = len(services) * len(models) * requests_per_model_service
+    groups = {}
+    exclusions = {}
+    for model in models:
+        members = model.get("services", services)
+        if (not isinstance(members, list) or len(members) < 2
+                or len(set(members)) != len(members)
+                or not set(members).issubset(set(services))):
+            raise ValueError(model["id"] + ": 비교 그룹은 등록된 서로 다른 서비스 2개 이상이어야 합니다")
+        omitted = set(services) - set(members)
+        reasons = model.get("excluded_services", {})
+        if not isinstance(reasons, dict) or set(reasons) != omitted:
+            raise ValueError(model["id"] + ": 제외 서비스마다 명시적 사유가 필요합니다")
+        if any(not isinstance(v, str) or not v.strip() for v in reasons.values()):
+            raise ValueError(model["id"] + ": 빈 제외 사유는 허용하지 않습니다")
+        groups[model["id"]] = members
+        exclusions[model["id"]] = reasons
+    participating = {s for members in groups.values() for s in members}
+    request_count = sum(len(members) for members in groups.values()) * requests_per_model_service
     if request_count > limit:
         blockers.append("총 요청 상한 초과")
     if repetitions == 1:
@@ -133,6 +151,8 @@ def build_plan(root, config_path="config/benchmark.json"):
     cost_complete = {service: True for service in services}
     comparison_groups = []
     for service, profile in profiles.items():
+        if service not in participating:
+            continue
         url = urlsplit(profile.get("url") or "")
         if url.scheme != "https" or not url.hostname or url.username or url.password:
             blockers.append(service + ": 유효한 HTTPS 사이트 URL 미설정")
@@ -147,6 +167,8 @@ def build_plan(root, config_path="config/benchmark.json"):
         signatures = []
         evidence = []
         for service, profile in profiles.items():
+            if service not in groups[model["id"]]:
+                continue
             resolved = profile.get("models", {}).get(model["id"], {})
             reasoning = resolved.get("reasoning", {})
             valid_reasoning = (isinstance(reasoning, dict)
@@ -178,7 +200,9 @@ def build_plan(root, config_path="config/benchmark.json"):
         if len(set(signatures)) > 1:
             blockers.append(model["id"] + ": 사이트 간 모델·버전·추론·설정 불일치")
         comparison_groups.append({"candidate_id": model["id"], "requested_name": model["requested_name"],
-                                  "conditions_match": len(signatures) == len(services) and len(set(signatures)) == 1,
+                                  "services": groups[model["id"]],
+                                  "excluded_services": exclusions[model["id"]],
+                                  "conditions_match": len(signatures) == len(groups[model["id"]]) and len(set(signatures)) == 1,
                                   "evidence": evidence})
     for service in services:
         if budget is not None and estimated_cost[service] > budget:

@@ -18,7 +18,14 @@ class PlanningTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         for folder in ("config", "sites", "cases", "fixtures"):
-            shutil.copytree(ROOT / folder, self.root / folder)
+            shutil.copytree(ROOT / folder, self.root / folder, ignore=shutil.ignore_patterns('local'))
+        # Keep legacy smoke fixtures explicit; production defaults use core-v2.
+        config=self.read('config/benchmark.json')
+        config['case_file']='cases/smoke.json'
+        for model in config['models']:
+            model['enabled']=model['id']=='gemini-candidate'
+            model.pop('services',None);model.pop('excluded_services',None)
+        self.write('config/benchmark.json',config)
 
     def read(self, path):
         return json.loads((self.root / path).read_text(encoding="utf-8"))
@@ -46,12 +53,18 @@ class PlanningTests(unittest.TestCase):
             }
             self.write(path, profile)
 
-    def test_default_blocks_and_counts_followups(self):
+    def test_synthetic_smoke_blocks_and_counts_followups(self):
         plan = build_plan(self.root)
         self.assertEqual(plan["status"], "blocked")
         self.assertEqual(plan["requests_planned"], 9)
         self.assertFalse(plan["live_execution_implemented"])
         self.assertIsNone(plan["planned_cost_upper_bound_krw"]["monogpt"])
+
+    def test_project_default_uses_final_set(self):
+        config=json.loads((ROOT/'config/benchmark.json').read_text())
+        self.assertEqual(config['case_file'],'cases/core.json')
+        self.assertEqual([m['id'] for m in config['models'] if m['enabled']],['gpt-6-sol-candidate'])
+        self.assertEqual(build_plan(ROOT)['status'],'blocked')
 
     def test_matching_conditions_allow_only_offline_readiness(self):
         self.configured()
@@ -111,7 +124,7 @@ class PlanningTests(unittest.TestCase):
         fixture = {"id": "public-table-image", "path": "fixtures/sample.bin",
                    "sha256": hashlib.sha256(fixture_path.read_bytes()).hexdigest(),
                    "classification": "public", "review_status": "approved",
-                   "review_note": "synthetic bytes", "allowed_services": ["monogpt", "timely", "works-ai"]}
+                   "review_note": "synthetic bytes", "allowed_services": ["monogpt", "timely", "chatgpt"]}
         self.write("fixtures/manifest.json", {"schema_version": 1, "fixtures": [fixture]})
         cases = self.read("cases/smoke.json")
         cases["cases"][2].update(enabled=True, expected={"synthetic": True})
@@ -138,6 +151,33 @@ class PlanningTests(unittest.TestCase):
         cases = self.read("cases/smoke.json")
         cases["cases"].append(cases["cases"][0])
         self.write("cases/smoke.json", cases)
+        with self.assertRaises(ValueError):
+            build_plan(self.root)
+
+    def test_explicit_two_site_group_excludes_unavailable_service(self):
+        self.configured()
+        config = self.read("config/benchmark.json")
+        config["models"][0].update(services=["monogpt", "timely"],
+                                   excluded_services={"chatgpt": "synthetic unavailable model"})
+        self.write("config/benchmark.json", config)
+        profile = self.read("sites/chatgpt.json")
+        profile.update(models={}, browser_flow_verified=False, capabilities=[])
+        self.write("sites/chatgpt.json", profile)
+        plan = build_plan(self.root)
+        self.assertEqual(plan["requests_planned"], 6)
+        self.assertEqual(plan["status"], "ready_for_implementation")
+        self.assertEqual(plan["comparison_groups"][0]["services"], ["monogpt", "timely"])
+        self.assertIn("chatgpt", plan["comparison_groups"][0]["excluded_services"])
+
+    def test_implicit_or_single_site_exclusion_rejected(self):
+        config = self.read("config/benchmark.json")
+        config["models"][0]["services"] = ["monogpt", "timely"]
+        self.write("config/benchmark.json", config)
+        with self.assertRaises(ValueError):
+            build_plan(self.root)
+        config["models"][0].update(services=["monogpt"],
+                                   excluded_services={"chatgpt": "not offered", "timely": "not offered"})
+        self.write("config/benchmark.json", config)
         with self.assertRaises(ValueError):
             build_plan(self.root)
 

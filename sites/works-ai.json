@@ -3,5 +3,5 @@
   "status": "unverified", "browser_flow_verified": false,
   "capabilities": [], "models": {},
   "credit_observation": {"status": "unknown", "unit": null, "menu_steps": [], "settlement_timeout_seconds": null},
-  "notes": "정확한 URL, 개인/기업 계정 구분, 실제 UI 미확인."
+  "notes": "사용자 요청으로 현재 비교 대상에서 제외되고 ChatGPT로 대체됨. 미검증 참고 프로필만 보존하며 config/benchmark.json의 실행 대상에는 포함하지 않음."
 }

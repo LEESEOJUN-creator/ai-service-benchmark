@@ -1,7 +1,7 @@
 {
-  "id": "monogpt", "name": "MonoGPT", "url": null,
+  "id": "monogpt", "name": "MonoGPT", "url": "https://monogpt.kr/",
   "status": "unverified", "browser_flow_verified": false,
   "capabilities": [], "models": {},
   "credit_observation": {"status": "unknown", "unit": null, "menu_steps": [], "settlement_timeout_seconds": null},
-  "notes": "자사 서비스. 실제 URL과 UI 지침은 사용자가 추후 제공."
+  "notes": "사용자 제공 URL. UI 탐색 경로는 docs/BROWSER-FLOW.md 참고. 계정별 관측값과 실측은 runs/에만 저장하며 이 프로필은 엄격한 사전 점검을 통과하도록 검증된 상태가 아님."
 }
