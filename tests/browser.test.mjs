@@ -48,3 +48,19 @@ test('batch refuses request scope overflow',async()=>{
   await assert.rejects(runCase({caseDoc:{id:'new'},results:{records:[]},tabs:[{service:'monogpt'},{service:'timely'}],
     preflight:{uiVerified:true,conditionsMatch:true,authorizationScope:'synthetic one-request cap',maxTotalRequests:1}}),/scope exceeded/);
 });
+test('Timely generating status provides timing lower bound',async()=>{
+  const {tab}=tabMock({snapshot:'prompt\nstatus: 답변을 생성하고 있습니다.'});
+  const state={service:'timely',prompt:'prompt',sendActionReturned:true,startedMonotonic:performance.now(),observations:[]};
+  await observeWindow({tab,state,persist:async()=>{},windowMs:1});
+  assert.ok(state.lastGeneratingObservedMs>=0);assert.equal(state.status,'still_observing');
+});
+test('unapproved mismatch fails closed',async()=>{
+  await assert.rejects(runCase({caseDoc:{id:'x'},results:{records:[]},preflight:{uiVerified:true,conditionsMatch:false,comparisonMode:'exploratory',authorizationScope:'test',maxTotalRequests:2}}),/preflight/);
+});
+test('authorized exploratory batch remains labeled and retains per-service reasoning',async()=>{
+  const results={records:[],model:'Gemini',reasoning_by_service:{monogpt:'unknown',timely:'medium'}};
+  const helper={sendOnce:async({service,persist})=>{const s={service};await persist(s);return s;},observeWindow:async({state})=>state};
+  await runCase({caseDoc:{id:'x',turns:['prompt']},results,tabs:[{service:'monogpt'},{service:'timely'}],helper,persistRun:async()=>{},
+    preflight:{uiVerified:true,conditionsMatch:false,comparisonMode:'exploratory',userAuthorizedMismatch:true,mismatchNote:'explicit asymmetry',authorizationScope:'test only',maxTotalRequests:2}});
+  assert.equal(results.records[0].comparison_mode,'exploratory');assert.equal(results.records[0].reasoning,'unknown');assert.equal(results.records[1].reasoning,'medium');
+});

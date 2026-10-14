@@ -17,6 +17,8 @@
 6. 승인된 범위에서 예약·전송·답변·비용·증거를 기록한다. 한도·모델 없음·조건 미확정을 따로 표시한다.
 7. 개인 산출물은 `runs/`에 남긴다. 공용 CLI는 HTML을 출력한다. PDF/XLSX가 필요하면 실행 환경의 해당 도구로 변환하고 내용·렌더 결과를 검증한다.
 
+이번 계정의 Gemini 실측은 MonoGPT 기본 추론과 Timely 보통을 사용자가 지정한 탐색 비교다. 다른 사용자의 기본 설정이나 엄격 동일 추론 사례로 복사하지 않는다. 사이트별 메뉴·빈 대화·사용량·파일 다운로드는 매번 현재 화면에서 확인한다.
+
 ## 배포 시 포함/제외
 
 포함: README, AGENTS, benchmark, browser, cases, config의 공용 템플릿, docs, prompts, sites, tests, 빈 fixtures/manifest.json, .gitignore.

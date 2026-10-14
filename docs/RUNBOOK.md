@@ -27,7 +27,7 @@ python3 -m benchmark report --run pilot
 
 필수 필드: `kind=reserve`, 고유 `request_id`, `service`, 실제 `model`, `reasoning`, `case_id`, 원문 `prompt`, UTF-8 `prompt_sha256`, `ui_evidence`, `authorization_scope`, `request_limit`, `cost_mode=request_limited_unknown_price`, `unknown_price_acknowledged=true`, `comparison_tier`, `feature_settings`, `fixtures`.
 
-`unknown_price_acknowledged`는 실제 사용자와 합의한 경우에만 true입니다. 지침을 읽었다는 이유로 자동 설정하지 않습니다. `fixtures`는 ID별 `path`, `sha256`, `reviewed=true`, `allowed_services` 객체입니다. 경로는 프로젝트 상대 경로이고 예약 때 바이트를 다시 검사합니다. `comparison_tier=ui_matched`는 표시 조건 일치일 뿐 실제 백엔드가 같다는 의미가 아닙니다. 옵션 미노출은 `reasoning=not_exposed`, `comparison_tier=exploratory`이며 엄격 비교 순위에서 제외합니다. 서로 다른 노출 설정을 억지로 같은 것으로 매핑하지 않습니다.
+`unknown_price_acknowledged`는 실제 사용자와 합의한 경우에만 true입니다. 지침을 읽었다는 이유로 자동 설정하지 않습니다. `fixtures`는 ID별 `path`, `sha256`, `reviewed=true`, `allowed_services` 객체입니다. 경로는 프로젝트 상대 경로이고 예약 때 바이트를 다시 검사합니다. `comparison_tier=ui_matched`는 표시 조건 일치일 뿐 실제 백엔드가 같다는 의미가 아닙니다. 옵션 미노출은 `reasoning=not_exposed`, `comparison_tier=exploratory`이며 엄격 비교 순위에서 제외합니다. 서로 다른 노출 설정을 억지로 같은 것으로 매핑하지 않습니다. 비대칭 설정은 사용자가 서비스별 값을 명시한 경우에만 비교 범위·사유·요청 상한을 남깁니다.
 
 ### result 이벤트
 
@@ -39,7 +39,7 @@ python3 -m benchmark report --run pilot
 
 새 대화 → 모델 재선택 → 추론/검색/도구 확인 → 첨부 전 잔액 → 업로드 완료 → 전송 전 잔액 → 원문·파일 확인 → 예약 기록 → 전송 1회 → 완료 관측 → 답변 복사 → 생성 파일 다운로드/검증 → 답변 후 잔액/소진 내역 → 결과 기록.
 
-- 새 대화의 기본 모델·추론값을 믿지 않습니다. 자동으로 다른 모델이 선택될 수 있습니다.
+- 새 대화의 기본 모델·추론값을 믿지 않습니다. 자동으로 다른 모델이 선택될 수 있습니다. 이전 답변·복사 버튼이 남아 있지 않은 빈 대화를 확인한 뒤 전송합니다.
 - 타임리의 PNG→WebP 같은 서비스 전처리는 원본 동일성과 별도로 기록합니다.
 - 입력 중 ‘프롬프트 고도화’를 누르지 않습니다. 실제 제출 문장이 원문과 같은지 다시 확인합니다.
 - 비용은 **첨부 비용 + 답변 비용 + 도구 비용 - 할인/환불**을 구분합니다. 공용 잔액이면 내역의 모델·시각·가능한 대화 식별자로 대조합니다. 귀속 불명 내역은 제외하고 불확실성을 표시합니다.
@@ -49,6 +49,7 @@ python3 -m benchmark report --run pilot
 - Timely가 캔버스에 답변을 작성하면 캔버스 복사로 원문 전체를 수집합니다. 안내 메시지만 수집하지 않습니다.
 - `browser/gpt-medium.mjs`는 현재 한국어 UI에서 검증한 GPT 준비/복사 보조 코드입니다. `browser/batch.mjs`는 질문 객체를 인자로 고정하고 예약 상태를 전송 전에 저장합니다. 배치 전에 예산·동일 조건·자료 승인 검사를 완료해야 하며 이 모듈 자체가 예산 승인을 대신하지 않습니다.
 - 배치 호출에는 `preflight={uiVerified:true,conditionsMatch:true,authorizationScope:"실제 승인 범위",maxTotalRequests:승인된_요청수}`가 필요합니다. 이 값을 지침만 보고 자동 승인하지 않습니다. 누적 기록과 새 요청이 승인 수를 넘으면 전송 전에 차단합니다. 원화 비용 상한은 별도 사전 점검 대상입니다.
+- 비대칭 추론을 사용자가 지정했다면 `comparisonMode:"exploratory"`, `conditionsMatch:false`, `userAuthorizedMismatch:true`, 구체적 `mismatchNote`를 함께 넘깁니다. 결과에 사이트별 추론 값을 보존하고 엄격 비교 총점에 합치지 않습니다. 예시 구현 `browser/gemini-exploratory.mjs`는 이번 UI를 확인한 보조 코드이며 다른 계정에서는 메뉴·모델명을 다시 확인해야 합니다.
 - UI 메뉴가 바뀌거나 타임아웃이 나면 현황을 읽고 중단 지점을 확인합니다. 전송이나 생성 요청을 일괄 재시도하지 않습니다.
 
 ## 평가와 제출

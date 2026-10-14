@@ -52,7 +52,8 @@ export async function observeWindow({tab, state, persist, windowMs = 20000}) {
     const snapshot = await tab.playwright.domSnapshot();
     const elapsed = performance.now() - state.startedMonotonic;
     const promptSeen = snapshot.includes(state.prompt);
-    const stopped = c.stop ? snapshot.includes(`button "${c.stop}"`) : false;
+    const stopped = c.stop ? snapshot.includes(`button "${c.stop}"`) :
+      (state.service === 'timely' && snapshot.includes('status: 답변을 생성하고 있습니다.'));
     const copied = c.copy ? await tab.playwright.getByRole('button', {name:c.copy, exact:true}).count() === 1 : false;
     // ChatGPT may leave a stale completion status in a blank new chat. Require
     // the submitted prompt and actual final answer controls, not status alone.

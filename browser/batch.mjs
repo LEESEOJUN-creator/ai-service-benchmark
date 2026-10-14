@@ -1,7 +1,10 @@
 /** One immutable case per invocation. Host supplies approved tabs and persistence. */
 export async function runCase({caseDoc,results,tabs,helper,persistRun,windowMs=18000,preflight}) {
   if(results.records.some(r=>r.case_id===caseDoc.id)) throw new Error('Do not duplicate existing case');
-  if(!preflight || preflight.uiVerified!==true || preflight.conditionsMatch!==true ||
+  const exploratory = preflight?.comparisonMode === 'exploratory' &&
+    preflight?.conditionsMatch === false && preflight?.userAuthorizedMismatch === true &&
+    typeof preflight?.mismatchNote === 'string' && preflight.mismatchNote.trim();
+  if(!preflight || preflight.uiVerified!==true || (preflight.conditionsMatch!==true && !exploratory) ||
      typeof preflight.authorizationScope!=='string' || !preflight.authorizationScope.trim() ||
      !Number.isInteger(preflight.maxTotalRequests) || preflight.maxTotalRequests<1)
     throw new Error('Explicit verified preflight and approved request scope required');
@@ -15,7 +18,9 @@ export async function runCase({caseDoc,results,tabs,helper,persistRun,windowMs=1
     const id=caseDoc.id+'-'+service;
     let record=results.records.find(r=>r.id===id);
     if(!record){record={id,case_id:caseDoc.id,prompt_version:caseDoc.prompt_version,
-      model:results.model,reasoning:results.reasoning,
+      model:results.model,reasoning:results.reasoning_by_service?.[service] ?? results.reasoning,
+      comparison_mode:exploratory?'exploratory':'ui_matched',
+      mismatch_note:exploratory?preflight.mismatchNote:null,
       authorization_scope:preflight.authorizationScope};results.records.push(record);}
     Object.assign(record,state);
     const payload=JSON.stringify(results,null,2);
