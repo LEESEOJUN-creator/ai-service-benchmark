@@ -24,24 +24,28 @@ python3 -m benchmark report --run pilot
 
 `record --event`의 필드는 RUNBOOK을 확인하세요. PDF/XLSX는 해당 환경의 문서 도구로 `runs/`에 생성하고 렌더 검증합니다. 공용 Python 자동 내보내기는 현재 HTML까지입니다.
 
-## 구성
+## 폴더 안내
 
-사이트를 직접 조작할 때는 [공통 브라우저 흐름](docs/BROWSER-FLOW.md)을 먼저 읽고, 실행 대상의 [MonoGPT 지침](docs/sites/monogpt.md), [Timely AI 지침](docs/sites/timely.md), [ChatGPT 지침](docs/sites/chatgpt.md)을 읽으세요. 공통 문서는 진행 순서·예외 처리, 개별 문서는 버튼 위치·모델·추론·검색·첨부·크레딧·결과 수집을 담당합니다.
+다른 사용자는 [시작 프롬프트](prompts/start.md)를 Codex에 입력하고 [실행 순서](docs/RUNBOOK.md)를 따르면 됩니다. 사이트를 직접 조작할 때는 [공통 브라우저 흐름](docs/BROWSER-FLOW.md)과 해당 사이트의 버튼 안내서를 읽습니다.
 
-```text
-AGENTS.md                Codex 실행 지침과 정직한 결과 기록 원칙
-config/benchmark.json    서비스, 모델 후보, 반복 횟수, 예산
-sites/                  사이트별 확인 결과와 연결 규격
-cases/core.json          최종 공통 프롬프트 8개와 평가 기준
-fixtures/manifest.json  테스트 파일의 승인·해시·자료 분류
-prompts/start.md         다른 사용자가 입력할 시작 프롬프트
-benchmark/              사전 점검과 측정값 계산 코드
-tests/                  조건 일치와 비용 계산 검증
-docs/                   실행 흐름, 평가 기준, 작업 현황
-docs/sites/             사이트별 버튼 위치와 조작 지침
-local/                  로컬 설정·개인 계정용 정보 (Git 제외)
-runs/                   실제 답변·스크린샷·보고서 (Git 제외)
-```
+| 경로 | 담긴 내용 | 일반 사용자가 할 일 |
+|---|---|---|
+| `prompts/start.md` | Codex에게 전달할 시작 지시문 | 처음 실행할 때 사용 |
+| `cases/core.json` | 최종 비교 질문 8개와 항목별 평가 기준 | 세 사이트에 같은 원문 사용 |
+| `cases/smoke.json` | 연결·코드 점검용 짧은 예시 | 최종 보고서에는 사용하지 않음 |
+| `docs/` | 실행 절차, 평가 방법, 측정 원칙, 현재 상태 | 필요한 안내서 읽기 |
+| `docs/sites/` | MonoGPT·Timely·ChatGPT의 버튼 위치와 확인 방법 | 해당 사이트를 조작할 때 읽기 |
+| `sites/` | 사이트별 설정 JSON과 신규 사이트 연결 규격 | 계정별 지원 모델·비용을 확인하고 갱신. 실행 코드 아님 |
+| `config/` | 실행 대상·모델 후보·요청 상한의 기본 설정과 템플릿 | 자기 계정에 맞게 검증한 뒤 로컬 설정 사용 |
+| `fixtures/` | 이미지·파일 입력의 검토/해시 기록 양식 | 비개인 자료를 검토해 `fixtures/local/`에 등록 |
+| `browser/` | Codex 브라우저의 전송·완료 관측·모델 설정 보조 코드 | 보통 직접 수정하지 않음. UI가 바뀌면 재확인 |
+| `benchmark/` | 사전 점검, 실행 기록, 비용 계산, HTML 보고서 코드 | Python 명령으로 사용 |
+| `tests/` | 조건·기록·브라우저 보조 코드의 회귀 검사 | 변경 후 실행 |
+| `AGENTS.md` | Codex가 지킬 프로젝트 규칙 | 에이전트가 읽음 |
+
+`sites/`의 JSON은 기계가 읽는 설정이고 `docs/sites/`의 Markdown은 사람이 읽는 조작 안내서입니다. `sites/works-ai.json`은 이전 비교 후보의 **제외된 참고 기록**이며 현재 실행 설정에는 포함되지 않습니다.
+
+`local/`은 계정별 설정, `fixtures/local/`은 개인이 검토한 첨부 자료, `runs/`는 실제 답변·스크린샷·보고서를 두는 자리입니다. 이 세 경로는 Git에서 제외됩니다. 사이트 로그인 정보도 공용 파일에 넣지 않습니다.
 
 ## 비교 조건
 
