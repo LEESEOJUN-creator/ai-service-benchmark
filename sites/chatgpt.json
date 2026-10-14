@@ -3,5 +3,5 @@
   "status": "unverified", "browser_flow_verified": false,
   "capabilities": [], "models": {},
   "credit_observation": {"status": "unknown", "unit": null, "menu_steps": [], "settlement_timeout_seconds": null},
-  "notes": "Works AI를 대체한 현재 비교 대상. docs/sites/chatgpt.md 참고. 로그인된 Chat 화면과 모델 메뉴를 확인했으나 엄격한 모델·추론 매핑, 요청별 비용, 실측 흐름은 미검증. Chat/Work는 별도 실행 조건으로 기록하며 Gemini/Claude 후보를 지원한다고 가정하지 않음."
+  "notes": "현재 비교 대상. docs/sites/chatgpt.md 참고. 이번 계정에서 로그인 세션과 최종 질문 실행을 관측했으나 다른 계정의 모델·추론 매핑과 요청별 가격 상한은 재확인 필요. Chat/Work는 별도 실행 조건으로 기록하며 Gemini/Claude 후보를 지원한다고 가정하지 않음."
 }

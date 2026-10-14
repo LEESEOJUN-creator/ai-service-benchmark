@@ -1,7 +1,7 @@
 # AI Service Benchmark
 
 동일 모델·동일 추론 수준·동일 입력으로 AI 웹 서비스를 비교하는 재사용 가능한 프로젝트.
-현재 대상은 MonoGPT, Timely AI, ChatGPT이며, 다른 사용자가 본인 계정과 연결된 브라우저로 재실행하는 것을 목표로 합니다. Works AI는 사용자 요청으로 비교 대상에서 제외했습니다.
+현재 대상은 MonoGPT, Timely AI, ChatGPT이며, 다른 사용자가 본인 계정과 연결된 브라우저로 재실행하는 것을 목표로 합니다.
 
 ## 현재 상태
 
@@ -43,7 +43,7 @@ python3 -m benchmark report --run pilot
 | `tests/` | 조건·기록·브라우저 보조 코드의 회귀 검사 | 변경 후 실행 |
 | `AGENTS.md` | Codex가 지킬 프로젝트 규칙 | 에이전트가 읽음 |
 
-`sites/`의 JSON은 기계가 읽는 설정이고 `docs/sites/`의 Markdown은 사람이 읽는 조작 안내서입니다. `sites/works-ai.json`은 이전 비교 후보의 **제외된 참고 기록**이며 현재 실행 설정에는 포함되지 않습니다.
+`sites/`의 JSON은 기계가 읽는 설정이고 `docs/sites/`의 Markdown은 사람이 읽는 조작 안내서입니다.
 
 `local/`은 계정별 설정, `fixtures/local/`은 개인이 검토한 첨부 자료, `runs/`는 실제 답변·스크린샷·보고서를 두는 자리입니다. 이 세 경로는 Git에서 제외됩니다. 사이트 로그인 정보도 공용 파일에 넣지 않습니다.
 

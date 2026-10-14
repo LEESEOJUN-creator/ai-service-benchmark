@@ -16,7 +16,7 @@
   "classification": "public",
   "review_status": "approved",
   "review_note": "출처와 내용 검토 근거: 개인/기밀 정보 없음",
-  "allowed_services": ["monogpt", "timely", "works-ai"]
+  "allowed_services": ["monogpt", "timely", "chatgpt"]
 }
 ```
 
