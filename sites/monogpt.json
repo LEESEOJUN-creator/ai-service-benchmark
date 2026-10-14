@@ -1,0 +1,7 @@
+{
+  "id": "monogpt", "name": "MonoGPT", "url": null,
+  "status": "unverified", "browser_flow_verified": false,
+  "capabilities": [], "models": {},
+  "credit_observation": {"status": "unknown", "unit": null, "menu_steps": [], "settlement_timeout_seconds": null},
+  "notes": "자사 서비스. 실제 URL과 UI 지침은 사용자가 추후 제공."
+}

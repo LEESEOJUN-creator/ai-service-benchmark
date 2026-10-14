@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+!.env.example
+secrets/
+.auth/
+browser-profile/
+storage-state*.json
+*.har
+local/
+runs/
+fixtures/local/

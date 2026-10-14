@@ -1,0 +1,7 @@
+{
+  "id": "timely", "name": "Timely AI", "url": null,
+  "status": "unverified", "browser_flow_verified": false,
+  "capabilities": [], "models": {},
+  "credit_observation": {"status": "unknown", "unit": null, "menu_steps": [], "settlement_timeout_seconds": null},
+  "notes": "정확한 URL, 계정 요금제, 실제 UI 미확인."
+}

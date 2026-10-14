@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "text-table-01", "enabled": true, "requires": ["text"], "fixture_ids": [],
+      "turns": ["다음 매출과 비용은 모두 원 단위입니다. 1월 매출 1200000, 비용 750000. 2월 매출 980000, 비용 630000. 3월 매출 1450000, 비용 910000. 월별 이익과 전체 이익 합계를 계산하세요. 월, 매출, 비용, 이익의 네 열을 가진 Markdown 표를 만들고 마지막 행에 합계를 넣으세요. 표 아래 한 문장으로 이익이 가장 큰 월을 설명하세요. 제공하지 않은 사실은 추가하지 마세요."],
+      "expected": {"profits": [450000, 350000, 540000], "total_revenue": 3630000, "total_cost": 2290000, "total_profit": 1340000, "best_month": "3월"},
+      "rubric": ["월별 및 합계 계산 정확성", "표 구조 준수", "근거 없는 내용 없음"]
+    },
+    {
+      "id": "followup-01", "enabled": true, "requires": ["text"], "fixture_ids": [],
+      "turns": ["이번 대화에서 제품 A의 단가는 12000원, 제품 B의 단가는 8500원입니다. A 3개와 B 2개의 총액을 계산해 주세요. 배송비와 할인은 없습니다.", "앞서 주문에서 A를 1개 줄이고 B를 2개 추가하면 총액과 이전 총액 대비 차액은 얼마인가요? 변경된 수량도 적어 주세요."],
+      "expected": {"turn_1_total": 53000, "turn_2_total": 58000, "difference": 5000, "A": 2, "B": 4},
+      "rubric": ["이전 턴의 단가와 수량 유지", "계산 정확성", "변경 수량 표시"]
+    },
+    {
+      "id": "image-table-01", "enabled": false, "requires": ["image_upload"], "fixture_ids": ["public-table-image"],
+      "turns": ["첨부한 표 이미지의 제목, 열 이름, 각 행의 값을 읽어 Markdown 표로 옮겨 주세요. 판독할 수 없는 값은 추측하지 말고 '판독 불가'로 표시하세요. 이미지에 없는 값은 추가하지 마세요."],
+      "expected": null, "rubric": ["원본 대조 정확성", "누락 여부", "판독 불가 처리"]
+    },
+    {
+      "id": "pdf-evidence-01", "enabled": false, "requires": ["pdf_upload"], "fixture_ids": ["public-reference-pdf"],
+      "turns": ["첨부 문서에서 핵심 주장 세 가지를 추출하고 각 주장의 근거가 있는 PDF 페이지 번호를 적어 주세요. 문서에 명시된 사실과 본인의 해석을 구분하세요. 근거를 찾을 수 없으면 확인 불가라고 표시하세요."],
+      "expected": null, "rubric": ["문서 근거 정확성", "페이지 번호 정확성", "사실과 해석 구분"]
+    }
+  ]
+}
