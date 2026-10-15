@@ -5,7 +5,7 @@
   "fixture_manifest": "fixtures/manifest.json",
   "repetitions": 1,
   "budget_krw_per_service": null,
-  "max_total_requests": 12,
+  "max_total_requests": 40,
   "auto_top_up": false,
   "models": [
     {"id": "gemini-candidate", "requested_name": "Gemini 1종 (동일 추론 확인 필요)", "enabled": false, "services": ["monogpt", "timely"], "excluded_services": {"chatgpt": "공급자 모델 미제공; 실제 메뉴 재확인"}},

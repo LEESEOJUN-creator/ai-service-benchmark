@@ -63,6 +63,7 @@ class PlanningTests(unittest.TestCase):
     def test_project_default_uses_final_set(self):
         config=json.loads((ROOT/'config/benchmark.json').read_text())
         self.assertEqual(config['case_file'],'cases/core.json')
+        self.assertEqual(config['max_total_requests'],40)
         self.assertEqual([m['id'] for m in config['models'] if m['enabled']],['gpt-6-sol-candidate'])
         self.assertEqual(build_plan(ROOT)['status'],'blocked')
 

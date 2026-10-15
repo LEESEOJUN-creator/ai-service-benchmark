@@ -124,8 +124,8 @@ def validate_event(doc, event):
                     or event["service"] not in fixture.get("allowed_services", [])):
                 raise ValueError("파일 검토·해시·허용 서비스 필요")
         limit = event.get("request_limit")
-        if type(limit) is not int or not 1 <= limit <= 12:
-            raise ValueError("배치 요청 상한 1~12 필요")
+        if type(limit) is not int or not 1 <= limit <= 40:
+            raise ValueError("실행 요청 상한 1~40 필요")
         reserves = [e for e in doc["events"] if e["kind"] == "reserve"]
         if len(reserves) >= min([limit] + [e["request_limit"] for e in reserves]):
             raise ValueError("배치 상한 도달; 기존 상한을 올려 재개하지 마세요")

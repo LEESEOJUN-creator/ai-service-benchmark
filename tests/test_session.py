@@ -103,5 +103,10 @@ class SessionTests(unittest.TestCase):
     def test_limit(self):
         append_event(self.root,'test-run',dict(self.event,request_limit=1))
         with self.assertRaises(ValueError): append_event(self.root,'test-run',dict(self.event,request_id='timely-summary',service='timely'))
+    def test_limit_accepts_40_but_not_41(self):
+        append_event(self.root,'test-run',dict(self.event,request_limit=40))
+        other=dict(self.event,request_id='timely-summary',service='timely',request_limit=41)
+        with self.assertRaisesRegex(ValueError,'1~40'):
+            append_event(self.root,'test-run',other)
     def test_result_requires_reservation(self):
         with self.assertRaises(ValueError): append_event(self.root,'test-run',dict(kind='result',request_id='absent',status='timeout',cost_status='unavailable'))
