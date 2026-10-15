@@ -1,38 +1,372 @@
-"""Offline private HTML report from the durable journal; no external assets."""
-import html
+"""Private, dated PDF/XLSX export from the append-only execution journal."""
+from datetime import date
+from pathlib import Path
+import os
+import re
+import tempfile
+import zipfile
+from xml.sax.saxutils import escape
+
 from .session import read_session, session_dir
 
-
-def escaped(value):
-    return html.escape("미확인" if value is None else str(value), quote=True)
+SERVICE_NAMES = {"monogpt": "MonoGPT", "timely": "Timely AI", "chatgpt": "ChatGPT"}
 
 
-def report(root, name):
-    doc = read_session(root, name)
-    reservations = {e["request_id"]: e for e in doc["events"] if e["kind"] == "reserve"}
+def _text(value):
+    return "미확인" if value is None or value == "" else str(value)
+
+
+def _time(result):
+    low, high = result.get("last_generating_observed_ms"), result.get("first_complete_observed_ms")
+    if high is None:
+        return "미관측"
+    return (f"≤{high / 1000:.1f}초 (완료 관측 상한)" if low is None
+            else f"{low / 1000:.1f}~{high / 1000:.1f}초 (관측 구간)")
+
+
+def _cost(result):
+    if result.get("cost") is None:
+        return "미노출" if result.get("cost_status") == "unavailable" else "미확정"
+    return f"{result['cost']} {_text(result.get('cost_unit'))}"
+
+
+def _rows(doc):
     results = {e["request_id"]: e for e in doc["events"] if e["kind"] == "result"}
-    rows, details = [], []
-    for key, request in reservations.items():
-        result = results.get(key, {})
-        lower, upper = result.get("last_generating_observed_ms"), result.get("first_complete_observed_ms")
-        elapsed = "미확인" if upper is None else f"{(lower or 0)/1000:.2f}–{upper/1000:.2f}초 (관측 구간)"
-        cells = [request["case_id"], request["service"], request["model"], request["reasoning"],
-                 request["comparison_tier"], result.get("status", "전송 여부 대조 필요"), elapsed,
-                 result.get("cost"), result.get("cost_unit"), result.get("cost_status"), result.get("quality_note", "미평가")]
-        rows.append("<tr>" + "".join("<td>" + escaped(x) + "</td>" for x in cells) + "</tr>")
-        details.append("<details><summary>" + escaped(key) + "</summary><h3>입력</h3><pre>" + escaped(request["prompt"])
-                       + "</pre><h3>출력</h3><pre>" + escaped(result.get("answer")) + "</pre><p>" + escaped(result.get("limitations", "")) + "</p></details>")
-    tested = {r["case_id"] for r in reservations.values()}
-    pending = [c["id"] for c in doc["cases"] if c["id"] not in tested]
-    headers = ["항목", "서비스", "표시 모델", "추론", "비교 범위", "상태", "완료 시간", "차감", "단위", "비용 근거", "평가"]
-    content = """<!doctype html><html lang="ko"><meta charset="utf-8"><title>AI 서비스 비교 보고서</title>
-<style>body{font:15px/1.6 system-ui,sans-serif;color:#17243b;margin:32px;max-width:1600px}h1{color:#153b6b}table{border-collapse:collapse;width:100%;font-size:13px}th,td{border:1px solid #ccd5df;padding:9px;text-align:left;vertical-align:top}th{background:#eaf0f8}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f7fa;padding:16px}details{margin:12px 0}aside{border-left:4px solid #d69317;padding:12px;background:#fff6df}@media print{details{display:block}table{font-size:10px}body{margin:10px}}</style>
-<h1>AI 서비스 비교 보고서</h1><aside>화면에 표시된 모델·설정 기준의 서비스 경험 비교입니다. 실제 백엔드·시스템 프롬프트는 동일함을 보장하지 않습니다. 관측 시간은 정확한 생성 시간이 아니며, 서로 다른 크레딧은 직접 가격 비교하지 않습니다. 누락·미지원·미확정은 0점이나 무료가 아닙니다.</aside>"""
-    content += "<p>예약 " + str(len(reservations)) + "건 · 결과 기록 " + str(len(results)) + "건</p>"
-    content += "<p>미실행 항목: " + escaped(", ".join(pending) or "없음 (모델별 커버리지는 별도 확인)") + "</p>"
-    content += "<div style='overflow:auto'><table><thead><tr>" + "".join("<th>" + x + "</th>" for x in headers) + "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
-    content += "<h2>원문 및 한계</h2>" + "".join(details)
-    content += "<h2>정정·관찰</h2>" + "".join("<p>" + escaped(e["text"]) + "</p>" for e in doc["events"] if e["kind"] == "note") + "</html>"
-    path = session_dir(root, name) / "report.html"
-    path.write_text(content, encoding="utf-8")
-    return {"report": str(path), "external_upload": False}
+    assessments = {e["request_id"]: e for e in doc["events"] if e["kind"] == "assessment"}
+    cases = {c["id"]: c for c in doc["cases"]}
+    rows = []
+    for request in (e for e in doc["events"] if e["kind"] == "reserve"):
+        key = request["request_id"]
+        result, assessment = results.get(key, {}), assessments.get(key)
+        if result.get("status") == "success" and assessment is None:
+            raise ValueError(f"{key}: 기준별 관찰·판단·근거가 없어 최종 보고서를 만들 수 없음")
+        rows.append({"request": request, "result": result, "assessment": assessment,
+                     "case": cases[request["case_id"]], "group": request.get("model_group") or request["model"]})
+    return rows
+
+
+def _literal(cell, value):
+    # Copied answers beginning with '=' must never become spreadsheet formulas.
+    cell.value = value[:32767] if isinstance(value, str) else value
+    if isinstance(value, str):
+        cell.data_type = "s"
+
+
+def _cache_ledger_totals(path, totals):
+    """Cache the evaluated SUM result so previewers can read scores before Excel opens."""
+    cached = path.with_suffix(".cached.xlsx")
+    with zipfile.ZipFile(path) as source, zipfile.ZipFile(cached, "w") as target:
+        for info in source.infolist():
+            payload = source.read(info.filename)
+            if info.filename == "xl/worksheets/sheet3.xml":
+                for row_no, total in totals.items():
+                    pattern = (rb'(<c r="I' + str(row_no).encode() +
+                               rb'"[^>]*><f>.*?</f><v>)(</v></c>)')
+                    payload, count = re.subn(pattern, lambda match: match[1] + str(total).encode() + match[2],
+                                             payload, count=1, flags=re.DOTALL)
+                    if count != 1:
+                        raise ValueError(f"점수 수식 캐시 위치를 찾을 수 없음: I{row_no}")
+            target.writestr(info, payload)
+    os.replace(cached, path)
+
+
+def _write_xlsx(path, rows, doc, today, name):
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    compare = wb.active
+    compare.title = "서비스 비교"
+    detail = wb.create_sheet("기준별 평가")
+    ledger = wb.create_sheet("실측 원장")
+    answers = wb.create_sheet("답변 원문")
+    ux = wb.create_sheet("사용 경험")
+    navy, stripe = "193B63", "F5F8FC"
+
+    def setup(ws, labels, widths):
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(labels))
+        ws.cell(1, 1, ws.title).font = Font(name="Arial", size=17, bold=True, color=navy)
+        ws.row_dimensions[1].height = 32
+        ws.cell(2, 1, f"생성일 {today.isoformat()} · 실행 {name} · UI 표시 조건 비교, 백엔드 동일성 미검증")
+        ws.cell(2, 1).font = Font(name="Arial", size=10, color="52657A")
+        ws.sheet_view.showGridLines = False
+        ws.freeze_panes = "D5"
+        for col, (label, width) in enumerate(zip(labels, widths), 1):
+            cell = ws.cell(4, col, label)
+            cell.fill = PatternFill("solid", fgColor=navy)
+            cell.font = Font(name="Arial", size=10, bold=True, color="FFFFFF")
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+            ws.column_dimensions[get_column_letter(col)].width = width
+        ws.row_dimensions[4].height = 32
+
+    def add(ws, values, height=52):
+        row_no = ws.max_row + 1
+        for col, value in enumerate(values, 1):
+            cell = ws.cell(row_no, col)
+            _literal(cell, value)
+            cell.font = Font(name="Arial", size=10, color="24364B")
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+            cell.border = Border(bottom=Side(style="thin", color="D9E2EC"))
+            if row_no % 2 == 0:
+                cell.fill = PatternFill("solid", fgColor=stripe)
+        ws.row_dimensions[row_no].height = height
+        return row_no
+
+    services = list(SERVICE_NAMES) + list(dict.fromkeys(
+        r["request"]["service"] for r in rows if r["request"]["service"] not in SERVICE_NAMES))
+    setup(compare, ["모델 묶음", "질문 ID", *[SERVICE_NAMES.get(s, s) for s in services]],
+          [26, 23, *([65] * len(services))])
+    grouped = {}
+    for row in rows:
+        grouped.setdefault((row["group"], row["case"]["id"]), {})[row["request"]["service"]] = row
+    for group in dict.fromkeys(row["group"] for row in rows):
+        for case in doc["cases"]:
+            grouped.setdefault((group, case["id"]), {})
+    group_members = {}
+    for row in rows:
+        group_members.setdefault(row["group"], []).append(row)
+    for (group, case_id), members in grouped.items():
+        values = [group, case_id]
+        for service in services:
+            item = members.get(service)
+            if item is None:
+                exclusion = next((r["request"].get("excluded_services", {}).get(service)
+                                  for r in group_members[group]
+                                  if r["request"].get("excluded_services", {}).get(service)), None)
+                values.append("모델 없음 — " + exclusion if exclusion else
+                              "기록 없음 — 모델 없음으로 추정하지 않음")
+                continue
+            req, res, assessment = item["request"], item["result"], item["assessment"]
+            score = f"{sum(x['score'] for x in assessment['criteria'])}/20" if assessment else "미평가"
+            gaps = ([f"{x['criterion']}: {x['judgement']}" for x in assessment["criteria"] if x["score"] < 4]
+                    if assessment else [])
+            reason = gaps[:2] or ([assessment["criteria"][0]["observation"]] if assessment else [])
+            values.append("\n".join([f"{req['model']} · 추론 {req['reasoning']}",
+                                      f"품질 {score} · {_cost(res)} · {_time(res)}",
+                                      f"상태 {_text(res.get('status'))}", *reason]))
+        add(compare, values, 110)
+    compare.auto_filter.ref = f"A4:{get_column_letter(2 + len(services))}{max(4, compare.max_row)}"
+    compare.sheet_properties.pageSetUpPr.fitToPage = True
+    compare.page_setup.fitToWidth = 1
+    compare.page_setup.orientation = "landscape"
+
+    setup(detail, ["요청 ID", "모델 묶음", "질문", "서비스", "평가 기준", "점수 /4",
+                   "답변에서 확인한 사실", "판단·감점 이유", "근거 위치", "평가자", "블라인드"],
+          [27, 23, 22, 18, 32, 10, 62, 62, 35, 19, 13])
+    detail_ranges = {}
+    for item in rows:
+        assessment = item["assessment"]
+        if assessment is None:
+            continue
+        first = detail.max_row + 1
+        for criterion in assessment["criteria"]:
+            row_no = add(detail, [item["request"]["request_id"], item["group"], item["case"]["id"],
+                                  SERVICE_NAMES.get(item["request"]["service"], item["request"]["service"]),
+                                  criterion["criterion"], criterion["score"], criterion["observation"],
+                                  criterion["judgement"], criterion["evidence_ref"],
+                                  assessment["evaluator"], "예" if assessment["blind"] else "아니오"], 75)
+            if criterion["score"] < 4:
+                detail.cell(row_no, 6).fill = PatternFill(
+                    "solid", fgColor="FFF0D7" if criterion["score"] == 3 else "FCE4E2")
+        detail_ranges[item["request"]["request_id"]] = (first, detail.max_row)
+    detail.auto_filter.ref = f"A4:K{max(4, detail.max_row)}"
+
+    setup(ledger, ["요청 ID", "모델 묶음", "질문", "서비스", "표시 모델", "추론", "비교 범위",
+                   "상태", "품질 /20", "차감", "단위", "비용 근거", "시간 구간", "입력 SHA256", "제한·오류"],
+          [27, 23, 22, 18, 30, 15, 18, 19, 13, 15, 14, 20, 34, 66, 50])
+    totals = {}
+    for item in rows:
+        req, res = item["request"], item["result"]
+        row_no = add(ledger, [req["request_id"], item["group"], item["case"]["id"],
+                              SERVICE_NAMES.get(req["service"], req["service"]), req["model"], req["reasoning"],
+                              req["comparison_tier"], _text(res.get("status")), None,
+                              res.get("cost"), res.get("cost_unit"), res.get("cost_status"), _time(res),
+                              req["prompt_sha256"], res.get("limitations")], 58)
+        if req["request_id"] in detail_ranges:
+            first, last = detail_ranges[req["request_id"]]
+            ledger.cell(row_no, 9, f"=SUM('기준별 평가'!F{first}:F{last})")
+            ledger.cell(row_no, 9).font = Font(name="Arial", bold=True, color=navy)
+            totals[row_no] = sum(c["score"] for c in item["assessment"]["criteria"])
+    ledger.auto_filter.ref = f"A4:O{max(4, ledger.max_row)}"
+
+    setup(answers, ["요청 ID", "질문 ID", "서비스", "구간", "공통 질문 원문", "답변 원문"],
+          [27, 23, 18, 10, 95, 115])
+    for item in rows:
+        req, res = item["request"], item["result"]
+        answer = res.get("answer") or "미수집"
+        for part, start in enumerate(range(0, len(answer), 30000), 1):
+            add(answers, [req["request_id"], item["case"]["id"],
+                          SERVICE_NAMES.get(req["service"], req["service"]), part,
+                          req["prompt"] if part == 1 else "앞 행과 동일", answer[start:start + 30000]], 135)
+    answers.auto_filter.ref = f"A4:F{max(4, answers.max_row)}"
+
+    setup(ux, ["서비스", "관찰 대상", "실제 관찰", "화면·기록 근거"], [20, 35, 90, 65])
+    for event in doc["events"]:
+        if event["kind"] == "ux":
+            for observation in event["observations"]:
+                add(ux, [SERVICE_NAMES.get(event["service"], event["service"]),
+                         observation["aspect"], observation["observation"], observation["evidence"]], 72)
+    if ux.max_row == 4:
+        add(ux, ["전체", "미관측", "UX 관측 기록이 없습니다.", "점수로 추정하지 않음"])
+    ux.auto_filter.ref = f"A4:D{ux.max_row}"
+    wb.calculation.fullCalcOnLoad = True
+    wb.save(path)
+    _cache_ledger_totals(path, totals)
+    with zipfile.ZipFile(path) as archive:
+        if archive.testzip() is not None:
+            raise ValueError("생성한 XLSX 압축 구조가 손상됨")
+
+
+def _write_pdf(path, rows, doc, today, name):
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+
+    font = "BenchmarkKorean"
+    candidates = ["/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+                  "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", "C:/Windows/Fonts/malgun.ttf"]
+    for candidate in candidates:
+        if Path(candidate).is_file():
+            try:
+                pdfmetrics.registerFont(TTFont(font, candidate))
+                break
+            except Exception:
+                continue
+    else:
+        font = "HYSMyeongJo-Medium"
+        pdfmetrics.registerFont(UnicodeCIDFont(font))
+    ink, navy = colors.HexColor("#203047"), colors.HexColor("#193B63")
+    body = ParagraphStyle("body", fontName=font, fontSize=9, leading=14, textColor=ink, wordWrap="CJK")
+    small = ParagraphStyle("small", parent=body, fontSize=8, leading=12)
+    heading = ParagraphStyle("heading", parent=body, fontSize=18, leading=26, textColor=navy, spaceAfter=12)
+    sub = ParagraphStyle("sub", parent=body, fontSize=12, leading=19, textColor=navy,
+                         spaceBefore=15, spaceAfter=7)
+
+    def p(value, style=body):
+        return Paragraph(escape(_text(value)).replace("\n", "<br/>"), style)
+
+    def table(matrix, widths):
+        result = Table([[p(value, small) for value in row] for row in matrix],
+                       colWidths=widths, repeatRows=1, hAlign="LEFT")
+        result.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E9F0F8")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("LINEBELOW", (0, 0), (-1, -1), .35, colors.HexColor("#D9E2EC")),
+        ]))
+        return result
+
+    story = [p("AI 서비스 비교 보고서", heading),
+             p(f"생성일 {today.isoformat()} · 실행 {name} · 결과 {len(rows)}건"),
+             Spacer(1, 10), p("읽는 법", sub),
+             p("표시 모델·추론·입력 조건의 서비스 경험 비교입니다. 실제 백엔드 동일성은 미검증입니다. "
+               "품질은 질문별 5개 기준(각 0~4점)으로 평가하며 비용·속도·UX와 합산하지 않습니다. "
+               "시간의 ≤는 완료 관측 상한만 확인했다는 뜻입니다. 다른 서비스의 크레딧 단위는 직접 가격 비교하지 않습니다."),
+             p("요약", sub)]
+    summary = [["질문", "서비스", "표시 모델 · 추론", "상태 · 품질", "차감", "시간"]]
+    for item in rows:
+        req, res, assessment = item["request"], item["result"], item["assessment"]
+        score = f"{sum(c['score'] for c in assessment['criteria'])}/20" if assessment else "미평가"
+        summary.append([item["case"]["id"], SERVICE_NAMES.get(req["service"], req["service"]),
+                        req["model"] + " · " + req["reasoning"], _text(res.get("status")) + " · " + score,
+                        _cost(res), _time(res)])
+    groups = {}
+    for item in rows:
+        groups.setdefault((item["group"], item["case"]["id"]), {})[item["request"]["service"]] = item
+    group_members = {}
+    for item in rows:
+        group_members.setdefault(item["group"], []).append(item)
+    for group in group_members:
+        for case in doc["cases"]:
+            groups.setdefault((group, case["id"]), {})
+    all_services = list(SERVICE_NAMES) + list(dict.fromkeys(
+        item["request"]["service"] for item in rows if item["request"]["service"] not in SERVICE_NAMES))
+    for (group, case_id), members in groups.items():
+        for service in all_services:
+            if service in members:
+                continue
+            exclusion = next((r["request"].get("excluded_services", {}).get(service)
+                              for r in group_members[group]
+                              if r["request"].get("excluded_services", {}).get(service)), None)
+            summary.append([case_id, SERVICE_NAMES.get(service, service),
+                            group + (" · 모델 없음" if exclusion else " · 미실측"),
+                            exclusion or "기록 없음 — 모델 없음으로 추정하지 않음",
+                            "해당 없음", "해당 없음"])
+    story.append(table(summary, [72, 74, 135, 87, 75, 64]))
+    story.extend([Spacer(1, 10),
+                  p("각 판단의 실제 관찰·감점 이유는 아래에, 전체 답변 원문은 동봉한 엑셀에 있습니다.", small)])
+    for item in rows:
+        req, res, assessment = item["request"], item["result"], item["assessment"]
+        story.extend([PageBreak(),
+                      p(f"{item['group']} · {item['case']['id']} · {SERVICE_NAMES.get(req['service'], req['service'])}", heading),
+                      p(f"{req['model']} / 추론 {req['reasoning']} / {_text(res.get('status'))} / {_cost(res)} / {_time(res)}"),
+                      p("답변 평가", sub)])
+        if assessment:
+            story.append(p(f"평가자: {assessment['evaluator']} · 블라인드: {'예' if assessment['blind'] else '아니오'}", small))
+            criteria = [["평가 기준", "점수", "확인한 사실과 위치", "판단·감점 이유"]]
+            for c in assessment["criteria"]:
+                criteria.append([c["criterion"], f"{c['score']}/4",
+                                 c["observation"] + "\n근거: " + c["evidence_ref"], c["judgement"]])
+            story.append(table(criteria, [111, 42, 176, 178]))
+        else:
+            story.append(p("성공 답변이 아니므로 품질 점수는 미평가. 실패·비용 상태는 별도로 유지합니다."))
+        if res.get("limitations"):
+            story.extend([p("제한과 오류", sub), p(res["limitations"])])
+        story.extend([p("공통 질문", sub), p(req["prompt"], small)])
+    story.extend([PageBreak(), p("사용 경험과 관찰", heading)])
+    ux_events = [event for event in doc["events"] if event["kind"] == "ux"]
+    if not ux_events:
+        story.append(p("UX 관측 기록이 없어 평가하지 않았습니다."))
+    for event in ux_events:
+        story.append(p(SERVICE_NAMES.get(event["service"], event["service"]), sub))
+        story.append(table([["관찰 대상", "실제 관찰", "근거"]] +
+                           [[x["aspect"], x["observation"], x["evidence"]] for x in event["observations"]],
+                           [100, 295, 112]))
+    notes = [event["text"] for event in doc["events"] if event["kind"] == "note"]
+    if notes:
+        story.append(p("정정·한계", sub))
+        story.extend(p(note) for note in notes)
+
+    def footer(canvas, current):
+        canvas.setFont(font, 8)
+        canvas.setFillColor(colors.HexColor("#61738A"))
+        canvas.drawString(44, 27, f"개인 비교 보고서 · {today.isoformat()} · {name}")
+        canvas.drawRightString(A4[0] - 44, 27, str(current.page))
+
+    SimpleDocTemplate(str(path), pagesize=A4, leftMargin=44, rightMargin=44,
+                      topMargin=40, bottomMargin=43, title="AI 서비스 비교 보고서",
+                      author="").build(story, onFirstPage=footer, onLaterPages=footer)
+    if not path.read_bytes().startswith(b"%PDF"):
+        raise ValueError("생성한 PDF 파일이 유효하지 않음")
+
+
+def report(root, name, *, report_date=None):
+    """Export exactly one dated PDF/XLSX pair; never silently replace prior files."""
+    today = date.fromisoformat(report_date) if report_date else date.today()
+    doc = read_session(root, name)
+    rows = _rows(doc)
+    if not rows:
+        raise ValueError("기록된 요청이 없어 최종 보고서를 만들 수 없음")
+    folder = session_dir(root, name) / "final"
+    folder.mkdir(exist_ok=True)
+    stem = f"AI-service-comparison_{today.isoformat()}_{name}"
+    pdf, xlsx = folder / f"{stem}.pdf", folder / f"{stem}.xlsx"
+    if pdf.exists() or xlsx.exists():
+        raise FileExistsError("최종 파일이 이미 있습니다. 기존 파일을 확인하고 새 실행 ID를 사용하세요")
+    try:
+        with tempfile.TemporaryDirectory(dir=folder) as temporary:
+            draft_pdf, draft_xlsx = Path(temporary) / "draft.pdf", Path(temporary) / "draft.xlsx"
+            _write_xlsx(draft_xlsx, rows, doc, today, name)
+            _write_pdf(draft_pdf, rows, doc, today, name)
+            os.replace(draft_xlsx, xlsx)
+            os.replace(draft_pdf, pdf)
+    except ImportError as exc:
+        raise ValueError("PDF·XLSX 출력에는 requirements-report.txt 설치가 필요합니다") from exc
+    return {"report": str(pdf), "workbook": str(xlsx), "records": len(rows),
+            "private": True, "external_upload": False}

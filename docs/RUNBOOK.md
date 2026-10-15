@@ -17,7 +17,11 @@ python3 -m benchmark init --run pilot
 python3 -m benchmark record --run pilot --event runs/pilot/reserve.json
 # 위 기록이 성공한 뒤 실제 UI 전송 1회
 python3 -m benchmark record --run pilot --event runs/pilot/result.json
+# 각 성공 답변의 기준별 평가와 서비스별 UX 관찰을 별도 이벤트로 기록
+python3 -m benchmark record --run pilot --event runs/pilot/assessment.json
+python3 -m benchmark record --run pilot --event runs/pilot/ux.json
 python3 -m benchmark status --run pilot
+python3 -m pip install -r requirements-report.txt
 python3 -m benchmark report --run pilot
 ```
 
@@ -27,6 +31,8 @@ python3 -m benchmark report --run pilot
 
 필수 필드: `kind=reserve`, 고유 `request_id`, `service`, 실제 `model`, `reasoning`, `case_id`, 원문 `prompt`, UTF-8 `prompt_sha256`, `ui_evidence`, `authorization_scope`, `request_limit`, `cost_mode=request_limited_unknown_price`, `unknown_price_acknowledged=true`, `comparison_tier`, `feature_settings`, `fixtures`.
 
+같은 모델 묶음의 사이트별 표시명이 다르면 `model_group`에 공통 묶음 이름을 기록합니다. 해당 서비스에서 모델을 실제로 제공하지 않는다고 확인한 경우에만 `excluded_services={"chatgpt":"모델 메뉴에서 확인한 미제공 사유"}`를 넣습니다. 보고서는 명시적 제외 사유가 없으면 `모델 없음` 대신 `기록 없음`으로 표시합니다.
+
 `unknown_price_acknowledged`는 실제 사용자와 합의한 경우에만 true입니다. 지침을 읽었다는 이유로 자동 설정하지 않습니다. `fixtures`는 ID별 `path`, `sha256`, `reviewed=true`, `allowed_services` 객체입니다. 경로는 프로젝트 상대 경로이고 예약 때 바이트를 다시 검사합니다. `comparison_tier=ui_matched`는 표시 조건 일치일 뿐 실제 백엔드가 같다는 의미가 아닙니다. 옵션 미노출은 `reasoning=not_exposed`, `comparison_tier=exploratory`이며 엄격 비교 순위에서 제외합니다. 서로 다른 노출 설정을 억지로 같은 것으로 매핑하지 않습니다. 비대칭 설정은 사용자가 서비스별 값을 명시한 경우에만 비교 범위·사유·요청 상한을 남깁니다.
 
 ### result 이벤트
@@ -34,6 +40,28 @@ python3 -m benchmark report --run pilot
 필수: `kind=result`, 같은 `request_id`, `status`, 성공 시 `answer`, `cost_status`. 선택: `cost`, `cost_unit`, `cost_components`, `last_generating_observed_ms`, `first_complete_observed_ms`, `quality_note`, `limitations`, `evidence`.
 
 미확정 비용은 null입니다. `cost_status`는 `ledger_verified`, `balance_observed`, `contaminated`, `pending`, `unavailable` 중 하나입니다. 실패·미지원도 비용이 들 수 있습니다. 미측정을 0으로 채우지 않습니다.
+
+### assessment / ux 이벤트
+
+성공 결과마다 `assessment`를 **result 저장 이후** 추가합니다. 필수: `kind=assessment`, 같은 `request_id`, `evaluator`, `blind`(진짜 블라인드 채점일 때만 true), `criteria` 배열. 배열은 해당 질문의 `rubric`과 같은 순서·이름으로 다섯 개를 담고, 각 항목에 `criterion`, 0~4 정수 `score`, 실제로 확인한 `observation`, 점수 판단·감점 이유 `judgement`, 답변 위치나 검사 ID `evidence_ref`를 넣습니다. 평가 없이 최종 PDF·XLSX를 생성하지 않습니다. 확정되지 않은 사실·숫자를 근거로 만들지 마세요.
+
+```json
+{
+  "kind": "assessment", "request_id": "mono-education-01",
+  "evaluator": "평가자 표시명", "blind": false,
+  "criteria": [
+    {
+      "criterion": "질문 rubric의 첫 기준을 그대로 입력",
+      "score": 3,
+      "observation": "답변에서 실제 확인한 수치·문구",
+      "judgement": "무엇을 충족했고 무엇이 빠져 3점인지",
+      "evidence_ref": "답변 첫 단락 또는 검사 ID"
+    }
+  ]
+}
+```
+
+위 배열은 형식 설명용 1개 항목 예시이며 실제 기록에는 해당 질문의 **5개 기준 모두** 필요합니다. `ux`는 서비스별 한 번 기록하며 `kind=ux`, `service`, `observations=[{"aspect":"모델 선택", "observation":"실제로 본 경로와 상태", "evidence":"화면 또는 기록 위치"}]` 형식입니다. 모델·추론 메뉴, 첨부·소진내역 접근, 설정 유지, 오류 복구, 답변 가독성·시각 요소, 다운로드 성공을 확인한 범위에서 적습니다. UX를 관찰하지 않았다면 미관측으로 둡니다. 평가는 결과를 덮어쓰지 않고 별도 이벤트로 보존합니다.
 
 ## 요청별 UI 흐름
 
@@ -62,4 +90,4 @@ python3 -m benchmark report --run pilot
 
 회귀 검사: `python3 -m unittest discover -s tests -v`, `node --test tests/browser.test.mjs`. 테스트는 실제 사이트 로그인이나 결제를 수행하지 않습니다.
 
-`report.html`은 오프라인 열람용이며 인쇄로 PDF 저장할 수 있습니다. 실제 원문·스크린샷·XLSX/PDF는 모두 `runs/` 아래입니다. Git에는 코드·빈 템플릿·공용 지침만 포함합니다. 파일을 공개 전송하기 전 계정 표시·대화 기록·개인정보를 검토합니다. 최종 보고서에는 **모델×서비스×8개 항목 전체 커버리지**와 제외/미실행 이유를 포함합니다. 일부 파일럿을 전체 완료라고 부르지 않습니다.
+`report` 명령은 `requirements-report.txt`를 설치한 환경에서 `runs/<run-id>/final/`에 날짜가 포함된 PDF·XLSX 두 파일을 만듭니다. 같은 이름의 최종 파일은 덮어쓰지 않습니다. PDF에는 기준별 관찰·판단·근거 위치, XLSX에는 비교표·기준별 평가·실측 원장·답변 원문·사용 경험을 담습니다. 생성된 PDF의 글자·페이지와 XLSX의 시트·수식·긴 답변을 직접 확인합니다. 원본 `session.json`과 증거는 자동 삭제하지 않으며, 개인별 보관 방침에 따라 최종본 검증 후에만 별도 정리합니다. Git에는 코드·빈 템플릿·공용 지침만 포함합니다. 파일을 공개 전송하기 전 계정 표시·대화 기록·개인정보를 검토합니다. 최종 보고서에는 **모델×서비스×8개 항목 전체 커버리지**와 제외/미실행 이유를 포함합니다. 일부 파일럿을 전체 완료라고 부르지 않습니다.

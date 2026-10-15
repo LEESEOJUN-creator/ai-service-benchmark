@@ -5,9 +5,9 @@
 
 ## 현재 상태
 
-**에이전트 실행형 키트입니다.** 최종 버전 `core-v2`의 8개 공통 프롬프트, 3사 UI 지침, 엄격 사전 점검, 중복 전송 방지 실행 기록, 오프라인 HTML 보고서, 브라우저 전송·완료 관측 보조 모듈을 제공합니다. 시작 순서는 [재사용 실행 절차](docs/RUNBOOK.md)에 있습니다. Python만으로 로그인·모델 선택까지 수행하는 독립 무인 실행기는 아닙니다. 현재 계정에서 GPT 24회, Claude 16회, Gemini 16회로 총 56개 최종 칸을 실측했으며 다른 사용자 환경의 재현 검증은 남아 있습니다. Gemini는 사용자 승인에 따른 비대칭 추론 설정의 참고 비교입니다.
+**에이전트 실행형 키트입니다.** 최종 버전 `core-v2`의 8개 공통 프롬프트, 3사 UI 지침, 엄격 사전 점검, 중복 전송 방지 실행 기록, 기준별 근거 평가와 날짜가 붙은 비공개 PDF·XLSX 출력, 브라우저 전송·완료 관측 보조 모듈을 제공합니다. 시작 순서는 [재사용 실행 절차](docs/RUNBOOK.md)에 있습니다. Python만으로 로그인·모델 선택까지 수행하는 독립 무인 실행기는 아닙니다. 현재 계정에서 GPT 24회, Claude 16회, Gemini 16회로 총 56개 최종 칸을 실측했으며 다른 사용자 환경의 재현 검증은 남아 있습니다. Gemini는 사용자 승인에 따른 비대칭 추론 설정의 참고 비교입니다.
 
-Python 3.9 이상과 Git만 있으면 초기 점검을 실행할 수 있습니다. 별도 패키지 설치는 필요하지 않습니다.
+Python 3.9 이상과 Git만 있으면 초기 점검을 실행할 수 있습니다. PDF·XLSX 출력에만 `requirements-report.txt`의 패키지가 필요합니다.
 
 ```sh
 python3 -m benchmark plan
@@ -19,10 +19,11 @@ python3 -m unittest discover -s tests -v
 ```sh
 python3 -m benchmark init --run pilot
 python3 -m benchmark status --run pilot
+python3 -m pip install -r requirements-report.txt
 python3 -m benchmark report --run pilot
 ```
 
-`record --event`의 필드는 RUNBOOK을 확인하세요. PDF/XLSX는 해당 환경의 문서 도구로 `runs/`에 생성하고 렌더 검증합니다. 공용 Python 자동 내보내기는 현재 HTML까지입니다.
+`record --event`의 필드는 RUNBOOK을 확인하세요. 성공 답변마다 5개 기준의 `assessment` 기록이 있어야 최종 출력됩니다. `report`는 `runs/<run-id>/final/`에 날짜가 붙은 PDF와 XLSX **두 파일만** 생성하고 기존 최종 파일을 덮어쓰지 않습니다. 원본 실행 기록은 별도로 보관하며 사용자가 명시적으로 정리할 때만 삭제합니다.
 
 ## 폴더 안내
 
@@ -39,7 +40,7 @@ python3 -m benchmark report --run pilot
 | `config/` | 실행 대상·모델 후보·요청 상한의 기본 설정과 템플릿 | 자기 계정에 맞게 검증한 뒤 로컬 설정 사용 |
 | `fixtures/` | 이미지·파일 입력의 검토/해시 기록 양식 | 비개인 자료를 검토해 `fixtures/local/`에 등록 |
 | `browser/` | Codex 브라우저의 전송·완료 관측·모델 설정 보조 코드 | 보통 직접 수정하지 않음. UI가 바뀌면 재확인 |
-| `benchmark/` | 사전 점검, 실행 기록, 비용 계산, HTML 보고서 코드 | Python 명령으로 사용 |
+| `benchmark/` | 사전 점검, 실행 기록, 비용 계산, PDF·XLSX 출력 코드 | Python 명령으로 사용 |
 | `tests/` | 조건·기록·브라우저 보조 코드의 회귀 검사 | 변경 후 실행 |
 | `AGENTS.md` | Codex가 지킬 프로젝트 규칙 | 에이전트가 읽음 |
 
@@ -60,11 +61,11 @@ python3 -m benchmark report --run pilot
 
 ## 다음 작업
 
-다른 사람에게 전달하는 순서는 [HANDOFF](docs/HANDOFF.md)를 확인하세요. 로컬 테스트 40개가 통과했지만 다른 사용자의 실제 계정 실행은 아직 미검증입니다.
+다른 사람에게 전달하는 순서는 [HANDOFF](docs/HANDOFF.md)를 확인하세요. 로컬 테스트 43개가 통과했지만 다른 사용자의 실제 계정 실행은 아직 미검증입니다.
 
 1. 다른 사용자 계정·환경에서 재현 검증.
 2. Gemini의 엄격 동일 조건 비교가 필요하면 양쪽 추론 설정을 실제로 맞출 수 있는지 별도로 확인. 이번 참고 비교의 설정을 기본값으로 재사용하지 않음.
 3. Claude·Gemini의 파일 생성과 실패·재시도 결과를 실제 다운로드 및 사용 내역과 함께 재검증.
-4. 개인 최종 통합 PDF·XLSX·HTML은 `runs/final-comparison/`에 보관. GPT 1건은 도구 한도 실패했고, Claude 1건은 파일 수식이 문자열이었으며, 일부 파일 생성은 선택 모델과 사용 내역 모델이 달라 모델 비교에서 분리했습니다.
+4. 개인 최종 통합 자료는 공용 Git에 포함하지 않습니다. GPT 1건은 도구 한도 실패했고, Claude 1건은 파일 수식이 문자열이었으며, 일부 파일 생성은 선택 모델과 사용 내역 모델이 달라 모델 비교에서 분리했습니다.
 
 공용 저장소는 https://github.com/LEESEOJUN-creator/ai-service-benchmark 입니다. 공용 코드·지침만 배포하며 개인 보고서·계정·실제 답변·스크린샷·첨부 자료는 올리지 않습니다.

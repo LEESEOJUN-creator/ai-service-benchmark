@@ -65,11 +65,26 @@ def append_event(root, name, event):
 
 def validate_event(doc, event):
     kind = event.get("kind")
-    if kind not in {"reserve", "result", "note"}:
-        raise ValueError("kind: reserve/result/note")
+    if kind not in {"reserve", "result", "assessment", "ux", "note"}:
+        raise ValueError("kind: reserve/result/assessment/ux/note")
     if kind == "note":
         if not isinstance(event.get("text"), str) or not event["text"].strip():
             raise ValueError("빈 note")
+        return
+    if kind == "ux":
+        if event.get("service") not in {"monogpt", "timely", "chatgpt"}:
+            raise ValueError("검증된 서비스 ID 필요")
+        observations = event.get("observations")
+        if not isinstance(observations, list) or not observations:
+            raise ValueError("UX 관측 항목 필요")
+        for item in observations:
+            if not isinstance(item, dict) or any(
+                not isinstance(item.get(field), str) or not item[field].strip()
+                for field in ("aspect", "observation", "evidence")
+            ):
+                raise ValueError("UX 항목에는 관찰 대상·내용·근거가 필요")
+        if any(x["kind"] == "ux" and x["service"] == event["service"] for x in doc["events"]):
+            raise ValueError("UX 기록 덮어쓰기 금지; 정정 note를 추가하세요")
         return
     key = event.get("request_id")
     if not isinstance(key, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,99}", key):
@@ -91,6 +106,13 @@ def validate_event(doc, event):
             raise ValueError("프롬프트 해시 불일치")
         if event.get("comparison_tier") not in {"ui_matched", "exploratory"}:
             raise ValueError("UI 일치 또는 탐색적 비교 여부 명시")
+        exclusions = event.get("excluded_services", {})
+        if not isinstance(exclusions, dict) or any(
+            service not in {"monogpt", "timely", "chatgpt"} or service == event["service"]
+            or not isinstance(reason, str) or not reason.strip()
+            for service, reason in exclusions.items()
+        ):
+            raise ValueError("제외 서비스와 검증된 사유 필요")
         if event["reasoning"] in {"unknown", "not_exposed"} and event["comparison_tier"] != "exploratory":
             raise ValueError("미공개 추론을 동일 조건으로 처리할 수 없음")
         if not isinstance(event.get("feature_settings"), dict) or not event["feature_settings"]:
@@ -125,7 +147,7 @@ def validate_event(doc, event):
                 for field in ("prompt_sha256", "reasoning", "fixtures", "feature_settings"):
                     if e.get(field) != event.get(field):
                         raise ValueError("비교 조건 변경: " + field)
-    else:
+    elif kind == "result":
         if not history or history[0]["kind"] != "reserve":
             raise ValueError("전송 예약 없는 결과")
         if any(x["kind"] == "result" for x in history):
@@ -145,6 +167,29 @@ def validate_event(doc, event):
             raise ValueError("비용 관측 상태 필요")
         if event.get("cost_status") in {"contaminated", "pending", "unavailable"} and event.get("cost") is not None:
             raise ValueError("미확정 비용은 null; 내역별 금액은 cost_components에 기록")
+    else:
+        result = next((x for x in history if x["kind"] == "result"), None)
+        if result is None or result["status"] != "success":
+            raise ValueError("성공 결과 기록 뒤에만 답변 평가 가능")
+        if any(x["kind"] == "assessment" for x in history):
+            raise ValueError("평가 덮어쓰기 금지; 정정 note를 추가하세요")
+        if not isinstance(event.get("evaluator"), str) or not event["evaluator"].strip():
+            raise ValueError("평가자 필요")
+        if type(event.get("blind")) is not bool:
+            raise ValueError("블라인드 평가 여부 필요")
+        reserve = history[0]
+        case = next(c for c in doc["cases"] if c["id"] == reserve["case_id"])
+        criteria = event.get("criteria")
+        if not isinstance(criteria, list) or len(criteria) != len(case["rubric"]):
+            raise ValueError("질문별 모든 평가 기준 필요")
+        for expected, item in zip(case["rubric"], criteria):
+            if not isinstance(item, dict) or item.get("criterion") != expected:
+                raise ValueError("평가 기준명·순서 불일치")
+            if type(item.get("score")) is not int or not 0 <= item["score"] <= 4:
+                raise ValueError("성공 답변 기준별 점수는 0~4 정수")
+            for field in ("observation", "judgement", "evidence_ref"):
+                if not isinstance(item.get(field), str) or not item[field].strip():
+                    raise ValueError("각 기준에 관찰·판단·답변/검사 위치 근거 필요")
 
 
 def status(root, name):

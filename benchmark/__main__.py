@@ -14,6 +14,7 @@ def main():
     parser.add_argument("--run", default="comparison")
     parser.add_argument("--cases", default="cases/core.json")
     parser.add_argument("--event", help="Git 제외 로컬 이벤트 JSON")
+    parser.add_argument("--report-date", help="PDF·XLSX 파일명 날짜 YYYY-MM-DD (기본: 실행일)")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     try:
@@ -27,7 +28,7 @@ def main():
             elif args.command == "status":
                 result = status(root, args.run)
             else:
-                result = report(root, args.run)
+                result = report(root, args.run, report_date=args.report_date)
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
         plan = build_plan(root, args.config)
