@@ -24,7 +24,7 @@ python3 -m pip install -r requirements-report.txt
 python3 -m benchmark report --run pilot --rates local/credit-rates.json
 ```
 
-`record --event`의 필드는 RUNBOOK을 확인하세요. 성공 답변마다 5개 기준의 `assessment` 기록이 있어야 최종 출력됩니다. `report`는 `runs/<run-id>/final/`에 날짜가 붙은 상세 PDF, XLSX, 비용·품질 그래프 PDF **세 파일**을 생성하고 기존 최종 파일을 덮어쓰지 않습니다. 크레딧 차감이 있으면 `--rates`에 서비스별 1크레딧당 원화 환산율이 필요합니다. 원시 크레딧은 XLSX 검증 원장에만 남기고 비교 표시 비용은 KRW로 바꿉니다. 원본 실행 기록은 별도로 보관하며 사용자가 명시적으로 정리할 때만 삭제합니다.
+`record --event`의 필드는 RUNBOOK을 확인하세요. 성공 답변마다 5개 기준의 `assessment` 기록이 있어야 최종 출력됩니다. `report`는 `~/AI-Benchmark-Reports/<run-id>/`에 날짜가 붙은 상세 PDF, XLSX, 질문별 비용·품질 선그래프 PDF **세 파일**을 생성하고 기존 최종 파일을 덮어쓰지 않습니다. 크레딧 차감이 있으면 `--rates`에 서비스별 1크레딧당 원화 환산율이 필요합니다. 원시 크레딧은 XLSX 검증 원장에만 남기고 비교 표시 비용은 KRW로 바꿉니다. 저장 위치를 바꾸려면 `--output-dir "원하는 폴더"`를 사용하세요. 원본 실행 기록은 별도로 보관하며 사용자가 명시적으로 정리할 때만 삭제합니다.
 
 ## 폴더 안내
 

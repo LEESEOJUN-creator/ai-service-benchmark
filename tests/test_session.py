@@ -60,7 +60,7 @@ class SessionTests(unittest.TestCase):
     def test_report_blocks_unassessed_success(self):
         self.success()
         with self.assertRaises(ValueError):
-            report(self.root,'test-run',report_date='2026-10-15')
+            report(self.root,'test-run',output_dir=self.root/'exports',report_date='2026-10-15')
     @unittest.skipUnless(importlib.util.find_spec('openpyxl') and importlib.util.find_spec('reportlab'),
                          'PDF/XLSX optional dependencies not installed')
     def test_dated_pdf_xlsx_and_literal_answer(self):
@@ -68,9 +68,10 @@ class SessionTests(unittest.TestCase):
         self.event['excluded_services']={'chatgpt':'synthetic not offered'}
         self.success()
         append_event(self.root,'test-run',self.assessment())
-        output=report(self.root,'test-run',report_date='2026-10-15')
+        output=report(self.root,'test-run',output_dir=self.root/'exports',report_date='2026-10-15')
         pdf,xlsx,chart=Path(output['report']),Path(output['workbook']),Path(output['chart'])
         self.assertEqual(pdf.parent,xlsx.parent)
+        self.assertEqual(pdf.parent,(self.root/'exports').resolve())
         self.assertEqual(sorted(p.name for p in pdf.parent.iterdir()),sorted([pdf.name,xlsx.name,chart.name]))
         self.assertIn('2026-10-15',pdf.name)
         self.assertTrue(pdf.read_bytes().startswith(b'%PDF'))
@@ -83,7 +84,7 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(book['답변 원문']['F5'].data_type,'s')
         self.assertTrue(book['답변 원문']['F5'].value.startswith('=HYPERLINK'))
         with self.assertRaises(FileExistsError):
-            report(self.root,'test-run',report_date='2026-10-15')
+            report(self.root,'test-run',output_dir=self.root/'exports',report_date='2026-10-15')
     def test_credit_conversion_requires_user_rate_and_preserves_unknown(self):
         self.assertIsNone(converted_cost({'cost':None,'cost_unit':'credits'},'monogpt',{}))
         with self.assertRaisesRegex(ValueError, '환산율'):
@@ -111,10 +112,10 @@ class SessionTests(unittest.TestCase):
             answer='타임리 답변',cost_status='balance_observed',cost='43',cost_unit='크레딧'))
         append_event(self.root,'test-run',dict(self.assessment(),request_id='timely-summary'))
         with self.assertRaisesRegex(ValueError,'환산율'):
-            report(self.root,'test-run',report_date='2026-10-15')
+            report(self.root,'test-run',output_dir=self.root/'exports',report_date='2026-10-15')
         with self.assertRaisesRegex(ValueError,'timely'):
-            report(self.root,'test-run',report_date='2026-10-15',credit_rates={'monogpt':'1'})
-        output=report(self.root,'test-run',report_date='2026-10-15',
+            report(self.root,'test-run',output_dir=self.root/'exports',report_date='2026-10-15',credit_rates={'monogpt':'1'})
+        output=report(self.root,'test-run',output_dir=self.root/'exports',report_date='2026-10-15',
                       credit_rates={'monogpt':'1','timely':'2'})
         book=load_workbook(output['workbook'])
         ledger=book['실측 원장']
@@ -125,6 +126,15 @@ class SessionTests(unittest.TestCase):
         self.assertIn('58원',book['서비스 비교']['C5'].value)
         self.assertIn('86원',book['서비스 비교']['D5'].value)
         self.assertTrue(Path(output['report']).read_bytes().startswith(b'%PDF'))
+    @unittest.skipUnless(importlib.util.find_spec('openpyxl') and importlib.util.find_spec('reportlab'),
+                         'PDF/XLSX optional dependencies not installed')
+    def test_default_report_folder_is_visible_home_folder(self):
+        from unittest.mock import patch
+        self.success()
+        append_event(self.root,'test-run',self.assessment())
+        with patch('benchmark.reporting.Path.home',return_value=self.root):
+            output=report(self.root,'test-run',report_date='2026-10-15')
+        self.assertEqual(Path(output['report']).parent,(self.root/'AI-Benchmark-Reports'/'test-run').resolve())
     def test_duplicate_and_unresolved_block(self):
         append_event(self.root,'test-run',self.event)
         with self.assertRaises(ValueError): append_event(self.root,'test-run',self.event)

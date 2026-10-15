@@ -8,7 +8,7 @@ import zipfile
 from xml.sax.saxutils import escape
 
 from .costs import converted_cost, krw_text, normalize_rates
-from .session import read_session, session_dir
+from .session import read_session
 
 SERVICE_NAMES = {"monogpt": "MonoGPT", "timely": "Timely AI", "chatgpt": "ChatGPT"}
 
@@ -363,108 +363,11 @@ def _write_pdf(path, rows, doc, today, name, rates):
 
 
 def _write_chart_pdf(path, rows, today, name, rates):
-    """One page per model group; separate scales avoid mixing points with won."""
-    from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import ParagraphStyle
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-    from reportlab.graphics.shapes import Drawing, Rect, String
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
-
-    font = "BenchmarkChartKorean"
-    candidates = ["/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-                  "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", "C:/Windows/Fonts/malgun.ttf"]
-    for candidate in candidates:
-        if Path(candidate).is_file():
-            try:
-                pdfmetrics.registerFont(TTFont(font, candidate))
-                break
-            except Exception:
-                continue
-    else:
-        font = "HYSMyeongJo-Medium"
-        pdfmetrics.registerFont(UnicodeCIDFont(font))
-    body = ParagraphStyle("chart-body", fontName=font, fontSize=9, leading=15, wordWrap="CJK")
-    title = ParagraphStyle("chart-title", parent=body, fontSize=17, leading=25,
-                           textColor=colors.HexColor("#193B63"))
-    groups = {}
-    for item in rows:
-        groups.setdefault(item["group"], {}).setdefault(item["request"]["service"], []).append(item)
-    story = []
-    palette = {"monogpt": "#2764AD", "timely": "#24A58D", "chatgpt": "#E59B42"}
-    for group_index, (group, services) in enumerate(groups.items()):
-        if group_index:
-            story.append(PageBreak())
-        story.extend([
-            Paragraph(escape(f"{group} · 서비스별 비용·품질"), title),
-            Paragraph(escape(f"생성일 {today.isoformat()} · 실행 {name}"), body),
-            Spacer(1, 13),
-        ])
-        metrics = []
-        for service, items in services.items():
-            scored = [item for item in items if item["result"].get("status") == "success"
-                      and item["assessment"] is not None]
-            scores = [sum(c["score"] for c in item["assessment"]["criteria"]) for item in scored]
-            measured = [converted_cost(item["result"], service, rates) for item in items]
-            measured = [cost["krw"] for cost in measured if cost is not None]
-            metrics.append({"service": service, "scores": scores, "costs": measured,
-                            "cases": sorted({item["case"]["id"] for item in items}),
-                            "tiers": sorted({item["request"]["comparison_tier"] for item in items})})
-        max_cost = max((float(sum(m["costs"]) / len(m["costs"]))
-                        for m in metrics if m["costs"]), default=0)
-        chart = Drawing(505, 115 + 112 * len(metrics))
-        chart.add(String(8, chart.height - 18, "품질 평균 /20 · 성공 후 평가된 답변만", fontName=font,
-                         fontSize=11, fillColor=colors.HexColor("#193B63")))
-        top = chart.height - 54
-        for index, metric in enumerate(metrics):
-            y = top - index * 49
-            label = SERVICE_NAMES.get(metric["service"], metric["service"])
-            chart.add(String(8, y + 8, label[:20], fontName=font, fontSize=9))
-            if metric["scores"]:
-                average = sum(metric["scores"]) / len(metric["scores"])
-                chart.add(Rect(134, y, 260 * average / 20, 17,
-                               fillColor=colors.HexColor(palette.get(metric["service"], "#7A8DA4")), strokeColor=None))
-                chart.add(String(405, y + 4, f"{average:.1f}/20  n={len(metric['scores'])}", fontName=font, fontSize=9))
-            else:
-                chart.add(String(134, y + 4, "미평가", fontName=font, fontSize=9))
-        divider = top - 49 * len(metrics) - 5
-        chart.add(String(8, divider, "평균 비용 KRW/요청 · 비용이 확정된 요청만", fontName=font,
-                         fontSize=11, fillColor=colors.HexColor("#193B63")))
-        for index, metric in enumerate(metrics):
-            y = divider - 35 - index * 49
-            label = SERVICE_NAMES.get(metric["service"], metric["service"])
-            chart.add(String(8, y + 8, label[:20], fontName=font, fontSize=9))
-            if metric["costs"]:
-                average = sum(metric["costs"]) / len(metric["costs"])
-                width = 260 * float(average) / max_cost if max_cost else 0
-                chart.add(Rect(134, y, width, 17,
-                               fillColor=colors.HexColor(palette.get(metric["service"], "#7A8DA4")), strokeColor=None))
-                chart.add(String(405, y + 4, f"{krw_text(average)}  n={len(metric['costs'])}",
-                                 fontName=font, fontSize=9))
-            else:
-                chart.add(String(134, y + 4, "비용 미확정", fontName=font, fontSize=9))
-        story.extend([chart, Spacer(1, 8)])
-        for metric in metrics:
-            label = SERVICE_NAMES.get(metric["service"], metric["service"])
-            cases = ", ".join(metric["cases"])
-            rate_label = (f"1크레딧={krw_text(rates[metric['service']])}"
-                          if metric["service"] in rates else "크레딧 환산율 미적용")
-            story.append(Paragraph(escape(f"{label}: 기록 {len(metric['cases'])}개 질문 ({cases}); "
-                                           f"비교 범위 {', '.join(metric['tiers'])}; {rate_label}"), body))
-        story.append(Spacer(1, 10))
-        story.append(Paragraph("품질과 비용은 서로 다른 축이며 합산 점수나 종합 순위가 아닙니다. "
-                               "비용은 실패·미지원 요청도 차감이 확인되면 포함합니다. "
-                               "미노출은 0원으로 취급하지 않습니다. 질문 구성·표본 수가 다르면 막대 길이만으로 우열을 판단하지 마세요. "
-                               "환산율은 사용자 입력값이며 실제 청구액과 다를 수 있습니다.", body))
-    SimpleDocTemplate(str(path), pagesize=A4, leftMargin=45, rightMargin=45,
-                      topMargin=42, bottomMargin=42, title="서비스별 비용·품질 비교 그래프").build(story)
-    if not path.read_bytes().startswith(b"%PDF"):
-        raise ValueError("생성한 그래프 PDF 파일이 유효하지 않음")
+    from .charts import write_chart_pdf
+    write_chart_pdf(path, rows, today, name, rates)
 
 
-def report(root, name, *, report_date=None, credit_rates=None):
+def report(root, name, *, report_date=None, credit_rates=None, output_dir=None):
     """Export a private dated report, workbook, and chart; never replace prior files."""
     today = date.fromisoformat(report_date) if report_date else date.today()
     rates = normalize_rates(credit_rates)
@@ -475,8 +378,9 @@ def report(root, name, *, report_date=None, credit_rates=None):
     # Validate every known charge before creating any final files.
     for item in rows:
         converted_cost(item["result"], item["request"]["service"], rates)
-    folder = session_dir(root, name) / "final"
-    folder.mkdir(exist_ok=True)
+    folder = (Path(output_dir).expanduser() if output_dir is not None
+              else Path.home() / "AI-Benchmark-Reports" / name).resolve()
+    folder.mkdir(parents=True, exist_ok=True)
     stem = f"AI-service-comparison_{today.isoformat()}_{name}"
     pdf, xlsx, chart = (folder / f"{stem}.pdf", folder / f"{stem}.xlsx",
                         folder / f"{stem}_chart.pdf")
