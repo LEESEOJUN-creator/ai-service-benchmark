@@ -5,9 +5,9 @@
 
 ## 현재 상태
 
-**에이전트 실행형 키트입니다.** 최종 버전 `core-v2`의 8개 공통 프롬프트, 3사 UI 지침, 엄격 사전 점검, 중복 전송 방지 실행 기록, 기준별 근거 평가와 날짜가 붙은 비공개 PDF·XLSX 출력, 브라우저 전송·완료 관측 보조 모듈을 제공합니다. 시작 순서는 [재사용 실행 절차](docs/RUNBOOK.md)에 있습니다. Python만으로 로그인·모델 선택까지 수행하는 독립 무인 실행기는 아닙니다. 현재 계정에서 GPT 24회, Claude 16회, Gemini 16회로 총 56개 최종 칸을 실측했으며 다른 사용자 환경의 재현 검증은 남아 있습니다. Gemini는 사용자 승인에 따른 비대칭 추론 설정의 참고 비교입니다.
+**에이전트 실행형 키트입니다.** 최종 버전 `core-v2`의 8개 공통 프롬프트, 3사 UI 지침, 엄격 사전 점검, 중복 전송 방지 실행 기록, 기준별 근거 평가와 날짜가 붙은 비공개 상세 PDF·XLSX·그래프 PDF 출력, 브라우저 전송·완료 관측 보조 모듈을 제공합니다. 시작 순서는 [재사용 실행 절차](docs/RUNBOOK.md)에 있습니다. Python만으로 로그인·모델 선택까지 수행하는 독립 무인 실행기는 아닙니다. 현재 계정에서 GPT 24회, Claude 16회, Gemini 16회로 총 56개 최종 칸을 실측했으며 다른 사용자 환경의 재현 검증은 남아 있습니다. Gemini는 사용자 승인에 따른 비대칭 추론 설정의 참고 비교입니다.
 
-Python 3.9 이상과 Git만 있으면 초기 점검을 실행할 수 있습니다. PDF·XLSX 출력에만 `requirements-report.txt`의 패키지가 필요합니다.
+Python 3.9 이상과 Git만 있으면 초기 점검을 실행할 수 있습니다. PDF·XLSX·그래프 출력에만 `requirements-report.txt`의 패키지가 필요합니다.
 
 ```sh
 python3 -m benchmark plan
@@ -20,10 +20,11 @@ python3 -m unittest discover -s tests -v
 python3 -m benchmark init --run pilot
 python3 -m benchmark status --run pilot
 python3 -m pip install -r requirements-report.txt
-python3 -m benchmark report --run pilot
+# config/credit-rates.example.json을 복사해 local/credit-rates.json에 본인 계정의 환산율 입력
+python3 -m benchmark report --run pilot --rates local/credit-rates.json
 ```
 
-`record --event`의 필드는 RUNBOOK을 확인하세요. 성공 답변마다 5개 기준의 `assessment` 기록이 있어야 최종 출력됩니다. `report`는 `runs/<run-id>/final/`에 날짜가 붙은 PDF와 XLSX **두 파일만** 생성하고 기존 최종 파일을 덮어쓰지 않습니다. 원본 실행 기록은 별도로 보관하며 사용자가 명시적으로 정리할 때만 삭제합니다.
+`record --event`의 필드는 RUNBOOK을 확인하세요. 성공 답변마다 5개 기준의 `assessment` 기록이 있어야 최종 출력됩니다. `report`는 `runs/<run-id>/final/`에 날짜가 붙은 상세 PDF, XLSX, 비용·품질 그래프 PDF **세 파일**을 생성하고 기존 최종 파일을 덮어쓰지 않습니다. 크레딧 차감이 있으면 `--rates`에 서비스별 1크레딧당 원화 환산율이 필요합니다. 원시 크레딧은 XLSX 검증 원장에만 남기고 비교 표시 비용은 KRW로 바꿉니다. 원본 실행 기록은 별도로 보관하며 사용자가 명시적으로 정리할 때만 삭제합니다.
 
 ## 폴더 안내
 
@@ -40,7 +41,7 @@ python3 -m benchmark report --run pilot
 | `config/` | 실행 대상·모델 후보·요청 상한의 기본 설정과 템플릿 | 자기 계정에 맞게 검증한 뒤 로컬 설정 사용 |
 | `fixtures/` | 이미지·파일 입력의 검토/해시 기록 양식 | 비개인 자료를 검토해 `fixtures/local/`에 등록 |
 | `browser/` | Codex 브라우저의 전송·완료 관측·모델 설정 보조 코드 | 보통 직접 수정하지 않음. UI가 바뀌면 재확인 |
-| `benchmark/` | 사전 점검, 실행 기록, 비용 계산, PDF·XLSX 출력 코드 | Python 명령으로 사용 |
+| `benchmark/` | 사전 점검, 실행 기록, 원화 환산, PDF·XLSX·그래프 출력 코드 | Python 명령으로 사용 |
 | `tests/` | 조건·기록·브라우저 보조 코드의 회귀 검사 | 변경 후 실행 |
 | `AGENTS.md` | Codex가 지킬 프로젝트 규칙 | 에이전트가 읽음 |
 

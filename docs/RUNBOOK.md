@@ -26,7 +26,7 @@ python3 -m benchmark record --run pilot --event runs/pilot/assessment.json
 python3 -m benchmark record --run pilot --event runs/pilot/ux.json
 python3 -m benchmark status --run pilot
 python3 -m pip install -r requirements-report.txt
-python3 -m benchmark report --run pilot
+python3 -m benchmark report --run pilot --rates local/credit-rates.json
 ```
 
 `init`은 기존 실행을 덮어쓰지 않습니다. `record`는 같은 요청 ID의 재예약과 결과 덮어쓰기를 거부합니다. 정정은 `note` 이벤트로 추가합니다. 미완료 예약은 먼저 사이트 대화·크레딧과 대조하며 재전송하지 않습니다. 예약은 사용자 승인이나 브라우저 사전 검사를 대신하지 않습니다. 한 번에 하나의 기록 프로세스만 사용합니다. 비정상 종료 후 `.writer.lock`이 남으면 작성 프로세스 종료와 JSON 무결성을 확인한 뒤 수동 복구합니다.
@@ -44,6 +44,12 @@ python3 -m benchmark report --run pilot
 필수: `kind=result`, 같은 `request_id`, `status`, 성공 시 `answer`, `cost_status`. 선택: `cost`, `cost_unit`, `cost_components`, `last_generating_observed_ms`, `first_complete_observed_ms`, `quality_note`, `limitations`, `evidence`.
 
 미확정 비용은 null입니다. `cost_status`는 `ledger_verified`, `balance_observed`, `contaminated`, `pending`, `unavailable` 중 하나입니다. 실패·미지원도 비용이 들 수 있습니다. 미측정을 0으로 채우지 않습니다.
+
+### 원화 환산율 입력
+
+보고서 출력 전에 `config/credit-rates.example.json`을 `local/credit-rates.json`으로 복사하고, 실제 계정에서 적용할 `1크레딧당 원`을 양수로 입력합니다. 예를 들어 사용자가 MonoGPT 1크레딧=1원, Timely AI 1크레딧=2원이라고 정한 실행은 `{"monogpt": 1, "timely": 2}`입니다. 이는 사용자가 제공한 환산 기준이며 실제 청구액·할인·구독료를 자동 검증한 값이 아닙니다. 다른 계정·시점에는 다시 입력하세요. `local/`은 Git에서 제외됩니다.
+
+차감이 크레딧으로 기록된 서비스의 환산율이 없으면 보고서 생성 전에 오류를 내고 임의의 0원이나 기본 요율을 적용하지 않습니다. 원시 단위가 `KRW`/`원`이면 그대로 원화로 사용합니다. 차감 미확정·미노출은 환산하지 않고 `미확정`/`미노출`로 남깁니다. 원시 차감과 환산율은 XLSX `실측 원장`에서 검증할 수 있고, 비교표·상세 PDF·그래프의 비용은 KRW입니다.
 
 ### assessment / ux 이벤트
 
@@ -94,4 +100,4 @@ python3 -m benchmark report --run pilot
 
 회귀 검사: `python3 -m unittest discover -s tests -v`, `node --test tests/browser.test.mjs`. 테스트는 실제 사이트 로그인이나 결제를 수행하지 않습니다.
 
-`report` 명령은 실제 요청 기록이 하나 이상 있어야 최종 보고서를 만듭니다. 0건에서 `기록된 요청이 없어`가 나오면 생성기 고장이 아니라 아직 비교 결과가 없다는 뜻입니다. `status`로 중단 사유를 보고하고 임의의 성공·예약 이벤트를 만들지 마세요. 기록이 생긴 뒤에는 `requirements-report.txt`를 설치한 환경에서 `runs/<run-id>/final/`에 날짜가 포함된 PDF·XLSX 두 파일을 만듭니다. 같은 이름의 최종 파일은 덮어쓰지 않습니다. PDF에는 기준별 관찰·판단·근거 위치, XLSX에는 비교표·기준별 평가·실측 원장·답변 원문·사용 경험을 담습니다. 생성된 PDF의 글자·페이지와 XLSX의 시트·수식·긴 답변을 직접 확인합니다. 원본 `session.json`과 증거는 자동 삭제하지 않으며, 개인별 보관 방침에 따라 최종본 검증 후에만 별도 정리합니다. Git에는 코드·빈 템플릿·공용 지침만 포함합니다. 파일을 공개 전송하기 전 계정 표시·대화 기록·개인정보를 검토합니다. 최종 보고서에는 **모델×서비스×8개 항목 전체 커버리지**와 제외/미실행 이유를 포함합니다. 일부 파일럿을 전체 완료라고 부르지 않습니다.
+`report` 명령은 실제 요청 기록이 하나 이상 있어야 최종 보고서를 만듭니다. 0건에서 `기록된 요청이 없어`가 나오면 생성기 고장이 아니라 아직 비교 결과가 없다는 뜻입니다. `status`로 중단 사유를 보고하고 임의의 성공·예약 이벤트를 만들지 마세요. 기록이 생긴 뒤에는 `requirements-report.txt`를 설치한 환경에서 `runs/<run-id>/final/`에 날짜가 포함된 상세 PDF·XLSX·그래프 PDF 세 파일을 만듭니다. 같은 이름의 최종 파일은 덮어쓰지 않습니다. 상세 PDF에는 기준별 관찰·판단·근거 위치, XLSX에는 비교표·기준별 평가·실측 원장·답변 원문·사용 경험을 담습니다. 그래프 PDF는 모델 묶음별 품질 평균(/20)과 요청당 평균 KRW를 **서로 다른 축**에 표시하며 각 막대에 표본 수를 적습니다. 품질은 성공·평가 완료 답변만, 비용은 차감 확인된 실패 포함 요청도 집계합니다. 따라서 두 막대의 표본 수가 다를 수 있고 미노출 비용은 0원 막대가 아닙니다. 생성된 PDF의 글자·페이지·그래프와 XLSX의 시트·수식·긴 답변을 직접 확인합니다. 원본 `session.json`과 증거는 자동 삭제하지 않으며, 개인별 보관 방침에 따라 최종본 검증 후에만 별도 정리합니다. Git에는 코드·빈 템플릿·공용 지침만 포함합니다. 파일을 공개 전송하기 전 계정 표시·대화 기록·개인정보를 검토합니다. 최종 보고서에는 **모델×서비스×8개 항목 전체 커버리지**와 제외/미실행 이유를 포함합니다. 일부 파일럿을 전체 완료라고 부르지 않습니다.

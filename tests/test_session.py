@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from benchmark.session import initialize, append_event, status, session_dir
 from benchmark.reporting import report
+from benchmark.costs import converted_cost, normalize_rates
 
 
 class SessionTests(unittest.TestCase):
@@ -68,11 +69,12 @@ class SessionTests(unittest.TestCase):
         self.success()
         append_event(self.root,'test-run',self.assessment())
         output=report(self.root,'test-run',report_date='2026-10-15')
-        pdf,xlsx=Path(output['report']),Path(output['workbook'])
+        pdf,xlsx,chart=Path(output['report']),Path(output['workbook']),Path(output['chart'])
         self.assertEqual(pdf.parent,xlsx.parent)
-        self.assertEqual(sorted(p.suffix for p in pdf.parent.iterdir()),['.pdf','.xlsx'])
+        self.assertEqual(sorted(p.name for p in pdf.parent.iterdir()),sorted([pdf.name,xlsx.name,chart.name]))
         self.assertIn('2026-10-15',pdf.name)
         self.assertTrue(pdf.read_bytes().startswith(b'%PDF'))
+        self.assertTrue(chart.read_bytes().startswith(b'%PDF'))
         book=load_workbook(xlsx)
         self.assertEqual(book['기준별 평가']['F5'].value,3)
         self.assertIn('모델 없음',book['서비스 비교']['E5'].value)
@@ -82,6 +84,47 @@ class SessionTests(unittest.TestCase):
         self.assertTrue(book['답변 원문']['F5'].value.startswith('=HYPERLINK'))
         with self.assertRaises(FileExistsError):
             report(self.root,'test-run',report_date='2026-10-15')
+    def test_credit_conversion_requires_user_rate_and_preserves_unknown(self):
+        self.assertIsNone(converted_cost({'cost':None,'cost_unit':'credits'},'monogpt',{}))
+        with self.assertRaisesRegex(ValueError, '환산율'):
+            converted_cost({'cost':'58','cost_unit':'credits'},'monogpt',{})
+        self.assertEqual(converted_cost({'cost':'58','cost_unit':'credits'},'monogpt',
+                                        normalize_rates({'monogpt':'1'}))['krw'],58)
+        self.assertEqual(converted_cost({'cost':'43','cost_unit':'크레딧'},'timely',
+                                        normalize_rates({'timely':'2'}))['krw'],86)
+        self.assertEqual(converted_cost({'cost':'10','cost_unit':'KRW'},'chatgpt',{})['krw'],10)
+        with self.assertRaisesRegex(ValueError, '0보다 큰'):
+            normalize_rates({'timely':'0'})
+        with self.assertRaisesRegex(ValueError, '알 수 없는'):
+            converted_cost({'cost':'10','cost_unit':'tokens'},'timely',{'timely':2})
+    @unittest.skipUnless(importlib.util.find_spec('openpyxl') and importlib.util.find_spec('reportlab'),
+                         'PDF/XLSX optional dependencies not installed')
+    def test_report_converts_credit_to_krw_in_all_outputs(self):
+        from openpyxl import load_workbook
+        append_event(self.root,'test-run',self.event)
+        append_event(self.root,'test-run',dict(kind='result',request_id='mono-summary',status='success',
+            answer='검증 가능한 답변',cost_status='ledger_verified',cost='58',cost_unit='credits'))
+        append_event(self.root,'test-run',self.assessment())
+        timely=dict(self.event,request_id='timely-summary',service='timely')
+        append_event(self.root,'test-run',timely)
+        append_event(self.root,'test-run',dict(kind='result',request_id='timely-summary',status='success',
+            answer='타임리 답변',cost_status='balance_observed',cost='43',cost_unit='크레딧'))
+        append_event(self.root,'test-run',dict(self.assessment(),request_id='timely-summary'))
+        with self.assertRaisesRegex(ValueError,'환산율'):
+            report(self.root,'test-run',report_date='2026-10-15')
+        with self.assertRaisesRegex(ValueError,'timely'):
+            report(self.root,'test-run',report_date='2026-10-15',credit_rates={'monogpt':'1'})
+        output=report(self.root,'test-run',report_date='2026-10-15',
+                      credit_rates={'monogpt':'1','timely':'2'})
+        book=load_workbook(output['workbook'])
+        ledger=book['실측 원장']
+        self.assertEqual(ledger['M5'].value,'=J5*L5')
+        self.assertEqual(ledger['L5'].value,1)
+        self.assertEqual(load_workbook(output['workbook'],data_only=True)['실측 원장']['M5'].value,58)
+        self.assertEqual(load_workbook(output['workbook'],data_only=True)['실측 원장']['M6'].value,86)
+        self.assertIn('58원',book['서비스 비교']['C5'].value)
+        self.assertIn('86원',book['서비스 비교']['D5'].value)
+        self.assertTrue(Path(output['report']).read_bytes().startswith(b'%PDF'))
     def test_duplicate_and_unresolved_block(self):
         append_event(self.root,'test-run',self.event)
         with self.assertRaises(ValueError): append_event(self.root,'test-run',self.event)

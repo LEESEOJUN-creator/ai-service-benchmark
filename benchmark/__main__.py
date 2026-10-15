@@ -15,6 +15,7 @@ def main():
     parser.add_argument("--cases", default="cases/core.json")
     parser.add_argument("--event", help="Git 제외 로컬 이벤트 JSON")
     parser.add_argument("--report-date", help="PDF·XLSX 파일명 날짜 YYYY-MM-DD (기본: 실행일)")
+    parser.add_argument("--rates", help="로컬 서비스별 1크레딧당 원화 환산율 JSON (예: local/credit-rates.json)")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     try:
@@ -28,7 +29,8 @@ def main():
             elif args.command == "status":
                 result = status(root, args.run)
             else:
-                result = report(root, args.run, report_date=args.report_date)
+                rates = json.loads(Path(args.rates).read_text(encoding="utf-8")) if args.rates else None
+                result = report(root, args.run, report_date=args.report_date, credit_rates=rates)
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
         plan = build_plan(root, args.config)
