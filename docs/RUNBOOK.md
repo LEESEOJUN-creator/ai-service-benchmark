@@ -4,6 +4,12 @@
 
 ## 시작
 
+### 기본 40회 모델 배분
+
+`config/benchmark.json`과 `config/core-template.json`은 GPT·Claude·Gemini 후보를 모두 활성화합니다. GPT 8문항×3사=24회, Claude/Gemini 각각 교육·기획·이미지·파일 분석 4문항×2사=8회, 합계 40회입니다. 이미지/파일 항목은 검토·등록 후 로컬 질문 설정에서 활성화하므로 준비 전 `plan`의 요청 수는 40보다 작습니다. `case_ids`가 있는 모델은 해당 질문만 사용합니다. 모델별 공통 질문이 다르면 모델 간 전체 평균 순위를 만들지 않습니다. 전체 8문항을 3모델에 실행하려면 56회가 필요하며 기본 40회에 들어가지 않습니다. 특정 모델을 조용히 제외하거나 쪼개서 상한을 우회하지 않습니다.
+
+`python3 -m benchmark init --run <id> --config local/실행설정.json --cases local/질문설정.json`은 모델 계획과 질문을 고정합니다. 새 기록의 `reserve`에는 설정 모델 ID인 `candidate_id`를 넣습니다. 표시 모델명은 기존 `model` 필드로 별도 보존합니다. 기존 기록에 계획이 없으면 보고서는 현재 설정 참고라는 경고를 내고 누락 모델을 드러내며, 과거 승인 계획을 복원했다고 주장하지 않습니다.
+
 1. `AGENTS.md`, `README.md`, `docs/PROTOCOL.md`, `docs/EVALUATION.md`, 대상별 `docs/sites/`를 읽습니다. 최종 보고서는 core-v2 결과만 사용하고 이전 파일럿과 혼합하지 않습니다.
 2. 사용자가 각 사이트에 로그인합니다. 이미 로그인했다면 그 세션을 이용합니다. 비밀번호를 Git, 프롬프트 파일, 로그에 저장하지 않습니다. MFA·CAPTCHA·권한 확대는 해당 환경의 승인 절차를 따릅니다.
 3. 8개 항목 각 1개인 `cases/core.json`을 사용합니다. 모델별로 제공되는 서비스만 그룹에 넣고 제외 사유를 기록합니다. GPT 그룹은 3사, Gemini/Claude 그룹은 지원되는 2사입니다. 자동 라우팅·고가 최상위 모델은 사용하지 않습니다.
@@ -33,7 +39,7 @@ python3 -m benchmark report --run pilot --rates local/credit-rates.json
 
 ### reserve 이벤트
 
-필수 필드: `kind=reserve`, 고유 `request_id`, `service`, 실제 `model`, `reasoning`, `case_id`, 원문 `prompt`, UTF-8 `prompt_sha256`, `ui_evidence`, `authorization_scope`, `request_limit`, `cost_mode=request_limited_unknown_price`, `unknown_price_acknowledged=true`, `comparison_tier`, `feature_settings`, `fixtures`.
+필수 필드: `kind=reserve`, 새 계획의 `candidate_id`, 고유 `request_id`, `service`, 실제 `model`, `reasoning`, `case_id`, 원문 `prompt`, UTF-8 `prompt_sha256`, `ui_evidence`, `authorization_scope`, `request_limit`, `cost_mode=request_limited_unknown_price`, `unknown_price_acknowledged=true`, `comparison_tier`, `feature_settings`, `fixtures`.
 
 같은 모델 묶음의 사이트별 표시명이 다르면 `model_group`에 공통 묶음 이름을 기록합니다. 해당 서비스에서 모델을 실제로 제공하지 않는다고 확인한 경우에만 `excluded_services={"chatgpt":"모델 메뉴에서 확인한 미제공 사유"}`를 넣습니다. 보고서는 명시적 제외 사유가 없으면 `모델 없음` 대신 `기록 없음`으로 표시합니다.
 
@@ -44,6 +50,18 @@ python3 -m benchmark report --run pilot --rates local/credit-rates.json
 필수: `kind=result`, 같은 `request_id`, `status`, 성공 시 `answer`, `cost_status`. 선택: `cost`, `cost_unit`, `cost_components`, `last_generating_observed_ms`, `first_complete_observed_ms`, `quality_note`, `limitations`, `evidence`.
 
 미확정 비용은 null입니다. `cost_status`는 `ledger_verified`, `balance_observed`, `contaminated`, `pending`, `unavailable` 중 하나입니다. 실패·미지원도 비용이 들 수 있습니다. 미측정을 0으로 채우지 않습니다.
+
+실제 모델 전환은 `model_match=false`, `actual_model`, `actual_reasoning`, `limitations`에 선택 모델과 다른 근거를 적습니다. 실제 파일이 성공했으면 서비스 기능 성공과 모델 비교 제외를 구분합니다. 파일 생성은 항상 모델 평균·비용 선그래프에서 분리하고 별도 기능 표에 비용과 검증 근거를 남깁니다.
+
+### comparison 이벤트: 같은 질문의 답변 차이
+
+같은 모델·질문에서 두 서비스 이상 결과가 모이면 `kind=comparison`, `model_group`, `case_id`, `conclusion`, `observations`를 기록합니다. observations는 `request_id`, `observation`, `evidence_ref`를 가진 배열입니다. 결론에는 공통 충족사항, 실제 제안/구성/누락 차이, 사용자가 수정해야 할 부분을 근거에 따라 씁니다. 동점이어도 차이를 설명하고 차이가 없으면 없다고 씁니다. 결과가 없는 요청이나 다른 모델 질문을 인용할 수 없습니다. 비교 해설이 누락되면 보고서에 미기록으로 표시하며 기존 점수만으로 해설을 지어내지 않습니다.
+
+### 출력 구성
+
+상세 PDF와 XLSX 첫머리에 전체 후보 모델의 진행 범위와 모델별 요약을 표시합니다. 집계는 모든 대상 서비스에서 성공·평가·UI 일치가 확인된 동일 질문의 교집합만 사용하며 n을 공개합니다. 파일 생성·탐색 조건은 평균에서 뺍니다. 완료 관측 상한 중앙값은 실제 속도 순위가 아닙니다. XLSX 요약은 생성 시점 스냅샷이며 원장 수정 후 report를 재실행합니다.
+
+그래프 PDF는 범위표 + 모델별 비용·품질 페이지 + 모델별 시간·수치 대조 페이지 + 파일 생성/전환 기능 결과입니다. 긴 질문 세트는 10개씩 나눕니다. 미실측 모델도 범위표에서 사라지지 않습니다. 눈금을 조작하거나 점수를 벌려 차이를 과장하지 않습니다. 파일이 열리는 것만으로 검증을 끝내지 말고 누락 모델, 채점 근거, 요약 분모, 페이지 여백·숫자 겹침을 검사하세요.
 
 ### 원화 환산율 입력
 
@@ -100,4 +118,4 @@ python3 -m benchmark report --run pilot --rates local/credit-rates.json
 
 회귀 검사: `python3 -m unittest discover -s tests -v`, `node --test tests/browser.test.mjs`. 테스트는 실제 사이트 로그인이나 결제를 수행하지 않습니다.
 
-`report` 명령은 실제 요청 기록이 하나 이상 있어야 최종 보고서를 만듭니다. 0건에서 `기록된 요청이 없어`가 나오면 생성기 고장이 아니라 아직 비교 결과가 없다는 뜻입니다. `status`로 중단 사유를 보고하고 임의의 성공·예약 이벤트를 만들지 마세요. 기록이 생긴 뒤에는 `requirements-report.txt`를 설치한 환경에서 `~/AI-Benchmark-Reports/<run-id>/`에 날짜가 포함된 상세 PDF·XLSX·그래프 PDF 세 파일을 만듭니다. 같은 이름의 최종 파일은 덮어쓰지 않습니다. 상세 PDF에는 기준별 관찰·판단·근거 위치, XLSX에는 비교표·기준별 평가·실측 원장·답변 원문·사용 경험을 담습니다. 그래프 PDF는 모델별 가로 페이지에 질문별 비용(KRW)·품질(/20)·소요시간(초)의 선그래프 세 개를 배치합니다. 가로축은 같은 질문 순서, 색상은 서비스, 점의 숫자는 실제 값입니다. 미노출 비용·미평가 품질·미관측 시간은 선을 끊으며 0으로 채우지 않습니다. 시간은 성공 답변의 최초 완료 관측 상한을 점으로 표시하고, 마지막 생성 중~최초 완료 구간은 세로선과 구간 숫자로 보존합니다. 상한만 관측했으면 ≤로 표시하며 관측 간격이 넓은 경우 속도 순위를 단정하지 않습니다. 질문이 10개보다 많으면 다음 페이지로 나눕니다. 파일 생성의 도구·라우팅 개입과 탐색적 조건은 명시합니다. `--output-dir "원하는 폴더"`로 저장 위치를 바꿀 수 있으며 완료 시 실제 경로를 안내합니다. 생성된 PDF의 글자·페이지·그래프와 XLSX의 시트·수식·긴 답변을 직접 확인합니다. 원본 `session.json`과 증거는 자동 삭제하지 않으며, 개인별 보관 방침에 따라 최종본 검증 후에만 별도 정리합니다. Git에는 코드·빈 템플릿·공용 지침만 포함합니다. 파일을 공개 전송하기 전 계정 표시·대화 기록·개인정보를 검토합니다. 최종 보고서에는 **모델×서비스×8개 항목 전체 커버리지**와 제외/미실행 이유를 포함합니다. 일부 파일럿을 전체 완료라고 부르지 않습니다.
+`report` 명령은 실제 요청 기록이 하나 이상 있어야 최종 보고서를 만듭니다. 0건에서 `기록된 요청이 없어`가 나오면 생성기 고장이 아니라 아직 비교 결과가 없다는 뜻입니다. `status`로 중단 사유를 보고하고 임의의 성공·예약 이벤트를 만들지 마세요. 기록이 생긴 뒤에는 `requirements-report.txt`를 설치한 환경에서 `~/AI-Benchmark-Reports/<run-id>/`에 날짜가 포함된 상세 PDF·XLSX·그래프 PDF 세 파일을 만듭니다. 같은 이름의 최종 파일은 덮어쓰지 않습니다. 상세 PDF에는 기준별 관찰·판단·근거 위치, XLSX에는 비교표·기준별 평가·실측 원장·답변 원문·사용 경험을 담습니다. 그래프 PDF는 범위표 다음에 모델별 비용(KRW)·품질(/20) 페이지와 별도 소요시간(초)·수치 대조 페이지를 배치합니다. 가로축은 같은 질문 순서, 색상은 서비스, 점의 숫자는 실제 값입니다. 미노출 비용·미평가 품질·미관측 시간은 선을 끊으며 0으로 채우지 않습니다. 시간은 성공 답변의 최초 완료 관측 상한을 점으로 표시하고, 마지막 생성 중~최초 완료 구간은 세로선과 구간 숫자로 보존합니다. 상한만 관측했으면 ≤로 표시하며 관측 간격이 넓은 경우 속도 순위를 단정하지 않습니다. 질문이 10개보다 많으면 다음 페이지로 나눕니다. 파일 생성의 도구·라우팅 개입과 탐색적 조건은 명시합니다. `--output-dir "원하는 폴더"`로 저장 위치를 바꿀 수 있으며 완료 시 실제 경로를 안내합니다. 생성된 PDF의 글자·페이지·그래프와 XLSX의 시트·수식·긴 답변을 직접 확인합니다. 원본 `session.json`과 증거는 자동 삭제하지 않으며, 개인별 보관 방침에 따라 최종본 검증 후에만 별도 정리합니다. Git에는 코드·빈 템플릿·공용 지침만 포함합니다. 파일을 공개 전송하기 전 계정 표시·대화 기록·개인정보를 검토합니다. 최종 보고서에는 **모델×서비스×8개 항목 전체 커버리지**와 제외/미실행 이유를 포함합니다. 일부 파일럿을 전체 완료라고 부르지 않습니다.

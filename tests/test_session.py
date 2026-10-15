@@ -57,6 +57,31 @@ class SessionTests(unittest.TestCase):
                 observations=[dict(aspect='가독성',observation='좋음',evidence='')]))
         append_event(self.root,'test-run',dict(kind='ux',service='monogpt',
             observations=[dict(aspect='가독성',observation='표의 제목과 숫자가 구분됨',evidence='화면 캡처 1')]))
+
+    def test_comparison_requires_two_existing_service_results(self):
+        self.success()
+        event=dict(kind='comparison',model_group='common-model',case_id='summary-01',
+                   conclusion='동점이지만 표현 차이가 있음',observations=[
+                       dict(request_id='mono-summary',observation='세 줄 요약',evidence_ref='1행'),
+                       dict(request_id='timely-summary',observation='표로 요약',evidence_ref='표1')])
+        with self.assertRaises(ValueError):
+            append_event(self.root,'test-run',event)
+        append_event(self.root,'test-run',dict(self.event,request_id='timely-summary',service='timely'))
+        append_event(self.root,'test-run',dict(kind='result',request_id='timely-summary',status='success',
+                                             answer='표',cost_status='unavailable'))
+        append_event(self.root,'test-run',event)
+        with self.assertRaises(ValueError):
+            append_event(self.root,'test-run',event)
+
+    def test_init_freezes_scope_and_reserve_requires_candidate(self):
+        (self.root/'config').mkdir()
+        (self.root/'config/benchmark.json').write_text(json.dumps({'models':[
+            {'id':'candidate','enabled':True,'requested_name':'common-model','services':['monogpt','timely'],
+             'case_ids':['summary-01']}]}))
+        initialize(self.root,'scoped-run')
+        with self.assertRaisesRegex(ValueError,'candidate_id'):
+            append_event(self.root,'scoped-run',self.event)
+        append_event(self.root,'scoped-run',dict(self.event,candidate_id='candidate'))
     def test_report_blocks_unassessed_success(self):
         self.success()
         with self.assertRaises(ValueError):
@@ -77,6 +102,7 @@ class SessionTests(unittest.TestCase):
         self.assertTrue(pdf.read_bytes().startswith(b'%PDF'))
         self.assertTrue(chart.read_bytes().startswith(b'%PDF'))
         book=load_workbook(xlsx)
+        self.assertEqual(book.sheetnames[0],'모델별 요약')
         self.assertEqual(book['기준별 평가']['F5'].value,3)
         self.assertIn('모델 없음',book['서비스 비교']['E5'].value)
         self.assertEqual(book['실측 원장']['I5'].value,"=SUM('기준별 평가'!F5:F6)")

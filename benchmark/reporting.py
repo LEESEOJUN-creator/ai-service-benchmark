@@ -5,10 +5,13 @@ import os
 import re
 import tempfile
 import zipfile
+import math
+import unicodedata
 from xml.sax.saxutils import escape
 
 from .costs import converted_cost, krw_text, normalize_rates
 from .session import read_session
+from .overview import report_groups, coverage_text, summaries, assessment_warnings
 
 SERVICE_NAMES = {"monogpt": "MonoGPT", "timely": "Timely AI", "chatgpt": "ChatGPT"}
 
@@ -53,13 +56,13 @@ def _literal(cell, value):
         cell.data_type = "s"
 
 
-def _cache_ledger_totals(path, totals, costs):
+def _cache_ledger_totals(path, totals, costs, ledger_index=3):
     """Cache evaluated score/cost formulas for previewers before Excel opens."""
     cached = path.with_suffix(".cached.xlsx")
     with zipfile.ZipFile(path) as source, zipfile.ZipFile(cached, "w") as target:
         for info in source.infolist():
             payload = source.read(info.filename)
-            if info.filename == "xl/worksheets/sheet3.xml":
+            if info.filename == f"xl/worksheets/sheet{ledger_index}.xml":
                 for column, entries in (("I", totals), ("M", costs)):
                     for row_no, total in entries.items():
                         pattern = (rb'(<c r="' + column.encode() + str(row_no).encode() +
@@ -105,6 +108,7 @@ def _write_xlsx(path, rows, doc, today, name, rates):
 
     def add(ws, values, height=52):
         row_no = ws.max_row + 1
+        lines = 1
         for col, value in enumerate(values, 1):
             cell = ws.cell(row_no, col)
             _literal(cell, value)
@@ -113,18 +117,26 @@ def _write_xlsx(path, rows, doc, today, name, rates):
             cell.border = Border(bottom=Side(style="thin", color="D9E2EC"))
             if row_no % 2 == 0:
                 cell.fill = PatternFill("solid", fgColor=stripe)
-        ws.row_dimensions[row_no].height = height
+            width = max(10, ws.column_dimensions[get_column_letter(col)].width - 3)
+            wrapped = sum(max(1, math.ceil(sum(2 if unicodedata.east_asian_width(ch) in 'WF' else 1
+                                              for ch in part) / width)) for part in str(value or '').split('\n'))
+            lines = max(lines, wrapped)
+        ws.row_dimensions[row_no].height = min(409, max(32, lines * 14 + 12))
         return row_no
 
     services = list(SERVICE_NAMES) + list(dict.fromkeys(
         r["request"]["service"] for r in rows if r["request"]["service"] not in SERVICE_NAMES))
-    setup(compare, ["모델 묶음", "질문 ID", *[SERVICE_NAMES.get(s, s) for s in services]],
-          [26, 23, *([65] * len(services))])
+    setup(compare, ["모델 묶음", "질문 ID", *[SERVICE_NAMES.get(s, s) for s in services], "서비스 간 차이·실무 영향"],
+          [26, 23, *([65] * len(services)), 85])
+    comparisons = {(e['model_group'], e['case_id']): e for e in doc['events'] if e['kind'] == 'comparison'}
     grouped = {}
     for row in rows:
         grouped.setdefault((row["group"], row["case"]["id"]), {})[row["request"]["service"]] = row
+    planned_cases = {g['label']: set(g['cases']) for g in report_groups(rows, doc)}
     for group in dict.fromkeys(row["group"] for row in rows):
         for case in doc["cases"]:
+            if group in planned_cases and case['id'] not in planned_cases[group]:
+                continue
             grouped.setdefault((group, case["id"]), {})
     group_members = {}
     for row in rows:
@@ -144,12 +156,17 @@ def _write_xlsx(path, rows, doc, today, name, rates):
             score = f"{sum(x['score'] for x in assessment['criteria'])}/20" if assessment else "미평가"
             gaps = ([f"{x['criterion']}: {x['judgement']}" for x in assessment["criteria"] if x["score"] < 4]
                     if assessment else [])
-            reason = gaps[:2] or ([assessment["criteria"][0]["observation"]] if assessment else [])
+            selected = ([c for c in assessment["criteria"] if c["score"] < 4] or assessment["criteria"][:2]) if assessment else []
+            reason = [f"{c['criterion']}: {c['observation']} → {c['judgement']} (근거: {c['evidence_ref']})" for c in selected[:2]]
             values.append("\n".join([f"{req['model']} · 추론 {req['reasoning']}",
                                       f"품질 {score} · {_cost(res, req['service'], rates)} · {_time(res)}",
                                       f"상태 {_text(res.get('status'))}", *reason]))
-        add(compare, values, 110)
-    compare.auto_filter.ref = f"A4:{get_column_letter(2 + len(services))}{max(4, compare.max_row)}"
+        narrative = comparisons.get((group, case_id))
+        values.append(narrative['conclusion'] + '\n' + '\n'.join(
+            f"{o['request_id']}: {o['observation']} ({o['evidence_ref']})" for o in narrative['observations'])
+            if narrative else "비교 해설 미기록 — 같은 점수라도 답변 구성·제안·실무 영향의 차이는 별도 검토 필요")
+        add(compare, values, 190)
+    compare.auto_filter.ref = f"A4:{get_column_letter(3 + len(services))}{max(4, compare.max_row)}"
     compare.sheet_properties.pageSetUpPr.fitToPage = True
     compare.page_setup.fitToWidth = 1
     compare.page_setup.orientation = "landscape"
@@ -201,16 +218,17 @@ def _write_xlsx(path, rows, doc, today, name, rates):
             totals[row_no] = sum(c["score"] for c in item["assessment"]["criteria"])
     ledger.auto_filter.ref = f"A4:Q{max(4, ledger.max_row)}"
 
-    setup(answers, ["요청 ID", "질문 ID", "서비스", "구간", "공통 질문 원문", "답변 원문"],
-          [27, 23, 18, 10, 95, 115])
+    setup(answers, ["요청 ID", "질문 ID", "서비스", "구간", "공통 질문 원문", "답변 원문", "모델", "추론"],
+          [27, 23, 18, 10, 95, 115, 28, 15])
     for item in rows:
         req, res = item["request"], item["result"]
         answer = res.get("answer") or "미수집"
-        for part, start in enumerate(range(0, len(answer), 30000), 1):
+        for part, start in enumerate(range(0, len(answer), 1400), 1):
             add(answers, [req["request_id"], item["case"]["id"],
                           SERVICE_NAMES.get(req["service"], req["service"]), part,
-                          req["prompt"] if part == 1 else "앞 행과 동일", answer[start:start + 30000]], 135)
-    answers.auto_filter.ref = f"A4:F{max(4, answers.max_row)}"
+                          req["prompt"] if part == 1 else "앞 행과 동일", answer[start:start + 1400],
+                          req["model"], req["reasoning"]], 135)
+    answers.auto_filter.ref = f"A4:H{max(4, answers.max_row)}"
 
     setup(ux, ["서비스", "관찰 대상", "실제 관찰", "화면·기록 근거"], [20, 35, 90, 65])
     for event in doc["events"]:
@@ -221,9 +239,27 @@ def _write_xlsx(path, rows, doc, today, name, rates):
     if ux.max_row == 4:
         add(ux, ["전체", "미관측", "UX 관측 기록이 없습니다.", "점수로 추정하지 않음"])
     ux.auto_filter.ref = f"A4:D{ux.max_row}"
+    overview = wb.create_sheet("모델별 요약", 0)
+    setup(overview, ["모델", "진행 범위", "서비스", "공통 질문 수", "품질 평균 /20",
+                     "공통 질문 비용 합계(KRW)", "완료 관측 상한 중앙값", "만점/평가", "답변 차이·평가 근거"],
+          [26, 40, 20, 14, 24, 24, 24, 16, 100])
+    overview.cell(3, 1, "생성 시점 요약. 원장 변경 시 report 재생성. 파일 생성·탐색 조건은 평균에서 제외. 속도 순위 아님.")
+    for group in report_groups(rows, doc):
+        for entry in summaries(group, rates):
+            add(overview, [group['label'], coverage_text(group), SERVICE_NAMES.get(entry['service'], entry['service']),
+                           entry['n'], entry['quality'], entry['cost'], entry['time'], entry['perfect'], entry['evidence']], 145)
+        for service, reason in group['excluded'].items():
+            add(overview, [group['label'], "설정상 비교 대상 제외 · 현재 메뉴 근거 확인 필요",
+                           SERVICE_NAMES.get(service, service), None, None, None, None, None, reason], 50)
+    for warning in assessment_warnings(rows):
+        add(overview, ["평가 검토", warning], 55)
+    if doc.get("report_scope", {}).get("origin") != "init_snapshot":
+        add(overview, ["범위 주의", "실행 시작 시 계획 미고정. 현재 설정을 참고한 누락 점검이며 과거 승인 범위를 의미하지 않습니다."], 65)
+    overview.freeze_panes = "C5"
+    overview.auto_filter.ref = f"A4:I{overview.max_row}"
     wb.calculation.fullCalcOnLoad = True
     wb.save(path)
-    _cache_ledger_totals(path, totals, costs)
+    _cache_ledger_totals(path, totals, costs, wb.sheetnames.index("실측 원장") + 1)
     with zipfile.ZipFile(path) as archive:
         if archive.testzip() is not None:
             raise ValueError("생성한 XLSX 압축 구조가 손상됨")
@@ -282,8 +318,30 @@ def _write_pdf(path, rows, doc, today, name, rates):
                "품질은 질문별 5개 기준(각 0~4점)으로 평가하며 비용·속도·UX와 합산하지 않습니다. "
                "시간의 ≤는 완료 관측 상한만 확인했다는 뜻입니다. 비용은 사용자가 제공한 서비스별 원/크레딧 환산율을 적용한 원화입니다. "
                "환산율은 실제 결제액·할인·구독료와 다를 수 있습니다. 미노출·미확정은 0원이 아닙니다."),
-             p("적용 환산율: " + rates_label, small),
-             p("요약", sub)]
+             p("적용 환산율: " + rates_label, small)]
+    story.append(p("모델별 실행 범위", sub))
+    coverage = [["모델", "결과 기록 / 대상", "예정 질문"]]
+    for group in report_groups(rows, doc):
+        coverage.append([group['label'], coverage_text(group), ", ".join(group['cases'])])
+    story.append(table(coverage, [110, 170, 227]))
+    if doc.get("report_scope", {}).get("origin") != "init_snapshot":
+        story.append(p("시작 시 계획 미고정: 현재 설정을 참고한 누락 점검입니다. 과거 승인 범위나 전체 완료를 뜻하지 않습니다.", small))
+    for warning in assessment_warnings(rows):
+        story.append(p(warning, small))
+    for group in report_groups(rows, doc):
+        story.extend([PageBreak(), p(group['label'] + " · 서비스 비교 요약", heading), p(coverage_text(group))])
+        story.append(p("같은 질문에서 모든 대상 서비스의 성공·평가·UI 조건 일치가 확인된 교집합만 집계합니다. 파일 생성은 별도 기능 평가이며, 비용 미노출은 무료가 아닙니다. 완료 관측 상한 중앙값은 실제 응답시간 순위가 아닙니다.", small))
+        matrix = [["서비스", "공통 질문", "품질 평균", "비용 합계", "관측 상한 중앙값", "만점/평가"]]
+        entries = summaries(group, rates)
+        for entry in entries:
+            matrix.append([SERVICE_NAMES.get(entry['service'], entry['service']), entry['n'], entry['quality'],
+                           entry['cost'], entry['time'], entry['perfect']])
+        story.append(table(matrix, [83, 51, 110, 80, 103, 80]))
+        for entry in entries:
+            story.extend([p(SERVICE_NAMES.get(entry['service'], entry['service']) + " · 확인된 차이", sub), p(entry['evidence'])])
+        for service, reason in group['excluded'].items():
+            story.append(p(f"{SERVICE_NAMES.get(service, service)}: 설정상 비교 대상 제외 — {reason}", small))
+    story.extend([PageBreak(), p("질문별 실측 목록", heading)])
     summary = [["질문", "서비스", "표시 모델 · 추론", "상태 · 품질", "비용(KRW)", "시간"]]
     for item in rows:
         req, res, assessment = item["request"], item["result"], item["assessment"]
@@ -297,8 +355,11 @@ def _write_pdf(path, rows, doc, today, name, rates):
     group_members = {}
     for item in rows:
         group_members.setdefault(item["group"], []).append(item)
+    planned_cases = {g['label']: set(g['cases']) for g in report_groups(rows, doc)}
     for group in group_members:
         for case in doc["cases"]:
+            if group in planned_cases and case['id'] not in planned_cases[group]:
+                continue
             groups.setdefault((group, case["id"]), {})
     all_services = list(SERVICE_NAMES) + list(dict.fromkeys(
         item["request"]["service"] for item in rows if item["request"]["service"] not in SERVICE_NAMES))
@@ -316,6 +377,15 @@ def _write_pdf(path, rows, doc, today, name, rates):
     story.append(table(summary, [72, 74, 135, 87, 75, 64]))
     story.extend([Spacer(1, 10),
                   p("각 판단의 실제 관찰·감점 이유는 아래에, 전체 답변 원문은 동봉한 엑셀에 있습니다.", small)])
+    comparisons = [e for e in doc['events'] if e['kind'] == 'comparison']
+    story.extend([PageBreak(), p("서비스 간 답변 차이와 실무 영향", heading)])
+    if not comparisons:
+        story.append(p("비교 해설 미기록. 개별 채점표만 있으며 동점 답변의 제안·구성·실무 영향은 평가되지 않았습니다. 상세 채점표의 존재만으로 비교 분석 완료라고 보지 않습니다."))
+    for event in comparisons:
+        story.extend([p(event['model_group'] + ' · ' + event['case_id'], sub), p(event['conclusion'])])
+        story.append(table([["요청", "실제 차이", "근거"]] +
+                           [[o['request_id'], o['observation'], o['evidence_ref']] for o in event['observations']],
+                           [120, 260, 127]))
     for item in rows:
         req, res, assessment = item["request"], item["result"], item["assessment"]
         story.extend([PageBreak(),
@@ -334,7 +404,11 @@ def _write_pdf(path, rows, doc, today, name, rates):
             story.append(p("성공 답변이 아니므로 품질 점수는 미평가. 실패·비용 상태는 별도로 유지합니다."))
         if res.get("limitations"):
             story.extend([p("제한과 오류", sub), p(res["limitations"])])
-        story.extend([p("공통 질문", sub), p(req["prompt"], small)])
+        if res.get("status") != "success" or item['case']['id'] == 'file-generation-01':
+            story.extend([p("기능 결과·검증 근거", sub), p(res.get("answer")), p(res.get("evidence"), small)])
+    story.extend([PageBreak(), p("공통 질문 원문", heading)])
+    for case in doc['cases']:
+        story.extend([p(case['id'], sub), p("\n".join(case['turns']), small)])
     story.extend([PageBreak(), p("사용 경험과 관찰", heading)])
     ux_events = [event for event in doc["events"] if event["kind"] == "ux"]
     if not ux_events:
@@ -362,9 +436,9 @@ def _write_pdf(path, rows, doc, today, name, rates):
         raise ValueError("생성한 PDF 파일이 유효하지 않음")
 
 
-def _write_chart_pdf(path, rows, today, name, rates):
+def _write_chart_pdf(path, rows, today, name, rates, doc=None):
     from .charts import write_chart_pdf
-    write_chart_pdf(path, rows, today, name, rates)
+    write_chart_pdf(path, rows, today, name, rates, doc=doc)
 
 
 def report(root, name, *, report_date=None, credit_rates=None, output_dir=None):
@@ -372,6 +446,10 @@ def report(root, name, *, report_date=None, credit_rates=None, output_dir=None):
     today = date.fromisoformat(report_date) if report_date else date.today()
     rates = normalize_rates(credit_rates)
     doc = read_session(root, name)
+    if "report_scope" not in doc and (Path(root) / "config/benchmark.json").is_file():
+        from .planning import read_json
+        doc["report_scope"] = {"models": read_json(root, "config/benchmark.json")["models"],
+                               "origin": "current_config_not_original_plan"}
     rows = _rows(doc)
     if not rows:
         raise ValueError("기록된 요청이 없어 최종 보고서를 만들 수 없음")
@@ -393,7 +471,7 @@ def report(root, name, *, report_date=None, credit_rates=None, output_dir=None):
                                                   Path(temporary) / "chart.pdf")
             _write_xlsx(draft_xlsx, rows, doc, today, name, rates)
             _write_pdf(draft_pdf, rows, doc, today, name, rates)
-            _write_chart_pdf(draft_chart, rows, today, name, rates)
+            _write_chart_pdf(draft_chart, rows, today, name, rates, doc)
             os.replace(draft_xlsx, xlsx)
             os.replace(draft_pdf, pdf)
             os.replace(draft_chart, chart)

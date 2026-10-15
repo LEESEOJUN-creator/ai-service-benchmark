@@ -21,12 +21,15 @@ def session_dir(root, name):
     return path
 
 
-def initialize(root, name, case_file="cases/core.json"):
+def initialize(root, name, case_file="cases/core.json", config_file="config/benchmark.json"):
     folder = session_dir(root, name)
     folder.mkdir(parents=True, exist_ok=True)
     cases = read_json(root, case_file)
     # No accounts or credentials. All eight prompts are frozen even when gated.
     payload = {"schema_version": 1, "cases": cases["cases"], "events": []}
+    if project_path(root, config_file).is_file():
+        config = read_json(root, config_file)
+        payload["report_scope"] = {"models": config["models"], "origin": "init_snapshot"}
     with (folder / "session.json").open("x", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
     return {"status": "created", "path": str(folder), "browser_execution": False}
@@ -65,8 +68,33 @@ def append_event(root, name, event):
 
 def validate_event(doc, event):
     kind = event.get("kind")
-    if kind not in {"reserve", "result", "assessment", "ux", "note"}:
-        raise ValueError("kind: reserve/result/assessment/ux/note")
+    if kind not in {"reserve", "result", "assessment", "comparison", "ux", "note"}:
+        raise ValueError("kind: reserve/result/assessment/comparison/ux/note")
+    if kind == "comparison":
+        for field in ("model_group", "case_id", "conclusion"):
+            if not isinstance(event.get(field), str) or not event[field].strip():
+                raise ValueError("비교 해설에 모델 묶음·질문·결론 필요")
+        observations = event.get("observations")
+        if not isinstance(observations, list) or len(observations) < 2:
+            raise ValueError("비교 해설은 두 서비스 이상의 실제 관찰 필요")
+        seen = set()
+        for item in observations:
+            if not isinstance(item, dict) or any(not isinstance(item.get(f), str) or not item[f].strip()
+                                                for f in ("request_id", "observation", "evidence_ref")):
+                raise ValueError("비교 해설의 요청·관찰·근거 필요")
+            reserve = next((e for e in doc['events'] if e['kind'] == 'reserve'
+                            and e['request_id'] == item['request_id']), None)
+            if (reserve is None or reserve['case_id'] != event['case_id']
+                    or (reserve.get('model_group') or reserve['model']) != event['model_group']
+                    or not any(e['kind'] == 'result' and e['request_id'] == item['request_id'] for e in doc['events'])):
+                raise ValueError("비교 해설은 같은 묶음·질문의 실제 결과를 참조해야 합니다")
+            if reserve['service'] in seen:
+                raise ValueError("비교 해설 서비스 중복")
+            seen.add(reserve['service'])
+        if any(e['kind'] == 'comparison' and e['model_group'] == event['model_group']
+               and e['case_id'] == event['case_id'] for e in doc['events']):
+            raise ValueError("비교 해설 덮어쓰기 금지; 정정 note 사용")
+        return
     if kind == "note":
         if not isinstance(event.get("text"), str) or not event["text"].strip():
             raise ValueError("빈 note")
@@ -99,6 +127,14 @@ def validate_event(doc, event):
         if event["service"] not in {"monogpt", "timely", "chatgpt"}:
             raise ValueError("새 서비스는 규격·검증 후 코드에 등록")
         case = next((c for c in doc["cases"] if c["id"] == event["case_id"]), None)
+        scope_models = doc.get("report_scope", {}).get("models", [])
+        if scope_models:
+            model = next((m for m in scope_models if m["id"] == event.get("candidate_id")), None)
+            if model is None:
+                raise ValueError("고정 실행 계획의 candidate_id 필요")
+            if (not model.get("enabled") or event["service"] not in model.get("services", [])
+                    or event["case_id"] not in model.get("case_ids", [c["id"] for c in doc["cases"]])):
+                raise ValueError("고정 실행 계획 밖의 모델·서비스·질문")
         if case is None or event.get("prompt") not in case["turns"]:
             raise ValueError("고정 프롬프트 불일치")
         actual = hashlib.sha256(event["prompt"].encode()).hexdigest()
@@ -156,6 +192,10 @@ def validate_event(doc, event):
             raise ValueError("결과 상태 필요")
         if event["status"] == "success" and not event.get("answer"):
             raise ValueError("성공에는 원문이 필요합니다")
+        if 'model_match' in event and type(event['model_match']) is not bool:
+            raise ValueError("model_match는 boolean")
+        if event.get('model_match') is False and (not event.get('actual_model') or not event.get('limitations')):
+            raise ValueError("모델 전환은 actual_model과 limitations 근거 필요")
         for field in ("first_complete_observed_ms", "last_generating_observed_ms"):
             value = event.get(field)
             if value is not None and (type(value) not in (int, float) or not 0 <= value < float("inf")):

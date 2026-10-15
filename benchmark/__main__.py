@@ -22,7 +22,7 @@ def main():
     try:
         if args.command != "plan":
             if args.command == "init":
-                result = initialize(root, args.run, args.cases)
+                result = initialize(root, args.run, args.cases, args.config)
             elif args.command == "record":
                 if not args.event:
                     raise ValueError("--event 필요")

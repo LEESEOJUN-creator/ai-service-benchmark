@@ -25,6 +25,8 @@ class PlanningTests(unittest.TestCase):
         for model in config['models']:
             model['enabled']=model['id']=='gemini-candidate'
             model.pop('services',None);model.pop('excluded_services',None)
+            model.pop('case_ids',None)
+        config['models'].sort(key=lambda m: m['id'] != 'gemini-candidate')
         self.write('config/benchmark.json',config)
 
     def read(self, path):
@@ -64,8 +66,18 @@ class PlanningTests(unittest.TestCase):
         config=json.loads((ROOT/'config/benchmark.json').read_text())
         self.assertEqual(config['case_file'],'cases/core.json')
         self.assertEqual(config['max_total_requests'],40)
-        self.assertEqual([m['id'] for m in config['models'] if m['enabled']],['gpt-6-sol-candidate'])
+        self.assertEqual(len([m for m in config['models'] if m['enabled']]),3)
         self.assertEqual(build_plan(ROOT)['status'],'blocked')
+
+    def test_all_models_fit_cap_after_attachments_are_reviewed(self):
+        config=json.loads((ROOT/'config/benchmark.json').read_text())
+        from benchmark.planning import model_cases
+        cases=json.loads((ROOT/'cases/core.json').read_text())['cases']
+        counts=[len(model_cases(m,cases))*len(m['services']) for m in config['models']]
+        self.assertEqual(counts,[24,8,8])
+        self.assertEqual(sum(counts),40)
+        with self.assertRaises(ValueError):
+            model_cases({'id':'bad','case_ids':['absent']},cases)
 
     def test_matching_conditions_allow_only_offline_readiness(self):
         self.configured()

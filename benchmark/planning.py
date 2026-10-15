@@ -63,6 +63,18 @@ def known(value):
     return True
 
 
+def model_cases(model, cases):
+    """Explicit per-model selection; never silently drop a model to fit a cap."""
+    ids = model.get("case_ids")
+    if ids is None:
+        return list(cases)
+    known_ids = {case["id"] for case in cases}
+    if (not isinstance(ids, list) or not ids or len(ids) != len(set(ids))
+            or not set(ids).issubset(known_ids)):
+        raise ValueError(model["id"] + ": case_ids는 중복 없는 등록 질문 ID 목록이어야 합니다")
+    return [case for case in cases if case["id"] in ids]
+
+
 def build_plan(root, config_path="config/benchmark.json"):
     config = read_json(root, config_path)
     if config.get("schema_version") != 1:
@@ -122,8 +134,9 @@ def build_plan(root, config_path="config/benchmark.json"):
                        "input_sha256": digest({"turns": turns, "files": hashes}),
                        "turn_sha256": [hashlib.sha256(t.encode("utf-8")).hexdigest() for t in turns],
                        "files": hashes})
-    turns_per_repeat = sum(len(c["turns"]) for c in cases)
-    requests_per_model_service = repetitions * turns_per_repeat
+    selections = {m["id"]: model_cases(m, list(all_cases.values())) for m in models}
+    counts = {key: repetitions * sum(len(c["turns"]) for c in selected if c.get("enabled"))
+              for key, selected in selections.items()}
     groups = {}
     exclusions = {}
     for model in models:
@@ -141,7 +154,7 @@ def build_plan(root, config_path="config/benchmark.json"):
         groups[model["id"]] = members
         exclusions[model["id"]] = reasons
     participating = {s for members in groups.values() for s in members}
-    request_count = sum(len(members) for members in groups.values()) * requests_per_model_service
+    request_count = sum(len(members) * counts[key] for key, members in groups.items())
     if request_count > limit:
         blockers.append("총 요청 상한 초과")
     if repetitions == 1:
@@ -196,10 +209,12 @@ def build_plan(root, config_path="config/benchmark.json"):
                 blockers.append(service + "/" + model["id"] + ": 요청당 보수적 비용 상한 미확정")
                 cost_complete[service] = False
             else:
-                estimated_cost[service] += max_cost * requests_per_model_service
+                estimated_cost[service] += max_cost * counts[model["id"]]
         if len(set(signatures)) > 1:
             blockers.append(model["id"] + ": 사이트 간 모델·버전·추론·설정 불일치")
         comparison_groups.append({"candidate_id": model["id"], "requested_name": model["requested_name"],
+                                  "case_ids": [c["id"] for c in selections[model["id"]]],
+                                  "requests_planned": counts[model["id"]] * len(groups[model["id"]]),
                                   "services": groups[model["id"]],
                                   "excluded_services": exclusions[model["id"]],
                                   "conditions_match": len(signatures) == len(groups[model["id"]]) and len(set(signatures)) == 1,

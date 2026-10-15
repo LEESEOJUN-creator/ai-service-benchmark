@@ -14,8 +14,8 @@
 3. `prompts/start.md` 내용을 새 Codex 대화에 넣는다. 기존 사용자의 대화를 전달할 필요는 없다.
 4. 에이전트가 브라우저 연결과 사이트 로그인, 모델·추론·검색 설정을 확인한다. 로그인/MFA가 필요하면 해당 환경의 절차로 진행한다.
 5. `cases/core.json`의 최종 질문과 사용자별 검토 파일을 사용한다. 빈 공용 파일 manifest를 이전 사용자의 파일 경로로 채워 넣지 않는다.
-6. 승인된 범위에서 예약·전송·답변·비용·증거를 기록한다. 성공 답변마다 `assessment`에 기준별 관찰·판단·근거 위치를 기록하고, 서비스별 `ux` 관찰을 별도로 남긴다. 한도·모델 없음·조건 미확정을 따로 표시한다.
-7. `config/credit-rates.example.json`을 `local/credit-rates.json`으로 복사해 본인 계정의 1크레딧당 원화 환산율을 입력한다. `python3 -m pip install -r requirements-report.txt` 후 `python3 -m benchmark report --run <run-id> --rates local/credit-rates.json`으로 날짜가 붙은 상세 PDF·XLSX·그래프 PDF를 만든다. `~/AI-Benchmark-Reports/<run-id>/`에는 세 파일만 생긴다. `--output-dir`로 저장 위치를 지정할 수 있다. 그래프는 질문별 비용·품질·소요시간의 세 선그래프이며 모델마다 한 페이지다. 소요시간은 완료 관측 상한/구간을 표시한다. PDF 글자·페이지·그래프와 XLSX 각 시트·원화 수식·원문을 검증한다. 원본 기록은 자동 삭제되지 않는다.
+6. 승인된 범위에서 예약·전송·답변·비용·증거를 기록한다. 성공 답변마다 `assessment`에 기준별 관찰·판단·근거 위치를, 같은 질문의 서비스 간 차이는 `comparison`에 기록하고, 서비스별 `ux` 관찰을 별도로 남긴다. 한도·모델 없음·조건 미확정을 따로 표시한다.
+7. `config/credit-rates.example.json`을 `local/credit-rates.json`으로 복사해 본인 계정의 1크레딧당 원화 환산율을 입력한다. `python3 -m pip install -r requirements-report.txt` 후 `python3 -m benchmark report --run <run-id> --rates local/credit-rates.json`으로 날짜가 붙은 상세 PDF·XLSX·그래프 PDF를 만든다. `~/AI-Benchmark-Reports/<run-id>/`에는 세 파일만 생긴다. `--output-dir`로 저장 위치를 지정할 수 있다. 그래프는 범위표 다음에 모델별 비용·품질 페이지와 별도 시간·수치 대조 페이지를 두며 파일 생성/모델 전환은 기능 표로 분리한다. 소요시간은 완료 관측 상한/구간을 표시한다. PDF 글자·페이지·그래프와 XLSX 각 시트·원화 수식·원문을 검증한다. 원본 기록은 자동 삭제되지 않는다.
 
 이번 계정의 Gemini 실측은 MonoGPT 기본 추론과 Timely 보통을 사용자가 지정한 탐색 비교다. 다른 사용자의 기본 설정이나 엄격 동일 추론 사례로 복사하지 않는다. 사이트별 메뉴·빈 대화·사용량·파일 다운로드는 매번 현재 화면에서 확인한다.
 

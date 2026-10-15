@@ -4,6 +4,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from .costs import converted_cost, krw_text
+from .overview import report_groups, coverage_text, summaries, assessment_warnings
 
 SERVICE_NAMES = {"monogpt": "MonoGPT", "timely": "Timely AI", "chatgpt": "ChatGPT"}
 CASE_NAMES = {"education-01": "교육", "business-01": "기획", "summary-01": "요약",
@@ -42,6 +43,7 @@ def chart_groups(rows, rates):
                    if assessment and item["result"].get("status") == "success" else None)
         upper, lower, time_label = _observed_time(item["result"])
         series[case] = {"cost": charge["krw"] if charge else None, "quality": quality,
+                        "cost_status": item['result'].get('cost_status'),
                         "time": upper, "time_lower": lower, "time_label": time_label,
                         "model": item["request"]["model"], "reasoning": item["request"]["reasoning"],
                         "tier": item["request"]["comparison_tier"]}
@@ -73,19 +75,19 @@ def _cost_ceiling(values):
     rough = maximum / 4
     magnitude = 10 ** math.floor(math.log10(rough))
     step = next(n * magnitude for n in (1, 2, 2.5, 5, 10) if n * magnitude >= rough)
-    return step * 4
+    return math.ceil(maximum * 1.08 / step) * step
 
 
-def _panel(cases, services, metric, font):
+def _panel(cases, services, metric, font, height=185):
     from reportlab.graphics.shapes import Drawing, Line, String, Circle, Rect, Polygon
     from reportlab.lib import colors
     from reportlab.pdfbase import pdfmetrics
-    width, height = 760, 138
+    width = 760
     drawing = Drawing(width, height)
-    left, right, bottom, top = 53, 723, 24, 99
+    left, right, bottom, top = 53, 723, 27, height - 39
     heading = {"cost": "질문별 비용 (KRW · 원)", "quality": "질문별 답변 품질 (20점 만점)",
                "time": "질문별 소요시간 (초 · 완료 관측 상한/구간)"}[metric]
-    drawing.add(String(left, 122, heading, fontName=font, fontSize=10, fillColor=colors.HexColor("#233C5A")))
+    drawing.add(String(left, height - 16, heading, fontName=font, fontSize=11, fillColor=colors.HexColor("#233C5A")))
     values = [series.get(case, {}).get(metric) for series in services.values() for case in cases]
     ceiling = 20 if metric == "quality" else _cost_ceiling(values)
     for tick in range(5):
@@ -155,36 +157,78 @@ def _panel(cases, services, metric, font):
                                    fillColor=colors.white, strokeColor=None))
                 labels.append(String(x, ly, label, textAnchor="middle", fontName=font, fontSize=8, fillColor=color))
         if available < len(cases):
-            missing.append(f"{SERVICE_NAMES.get(service, service)} {len(cases)-available}개 미측정")
+            label = '비용 미노출' if metric == 'cost' and all(
+                series.get(case, {}).get('cost_status') == 'unavailable' for case in cases) else '미측정'
+            missing.append(f"{SERVICE_NAMES.get(service, service)} {len(cases)-available}개 {label}")
     # Labels must be above every series, not hidden by a later service's line.
     for shape in leaders + labels:
         drawing.add(shape)
     if missing:
-        drawing.add(String(right, 122, " / ".join(missing), textAnchor="end", fontName=font,
+        drawing.add(String(right, height - 16, " / ".join(missing), textAnchor="end", fontName=font,
                            fontSize=8, fillColor=colors.HexColor("#68788B")))
     return drawing
 
 
-def write_chart_pdf(path, rows, today, name, rates):
+def write_chart_pdf(path, rows, today, name, rates, doc=None):
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.graphics.shapes import Drawing, Line, String
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle
     font = _font()
     body = ParagraphStyle("chart-body", fontName=font, fontSize=8, leading=11, wordWrap="CJK")
     title = ParagraphStyle("chart-title", parent=body, fontSize=17, leading=22,
                            textColor=colors.HexColor("#233C5A"))
-    story = []
-    for group_index, (group_name, group) in enumerate(chart_groups(rows, rates).items()):
+    def para(value):
+        return Paragraph(escape(str(value)).replace("\n", "<br/>"), body)
+
+    def table(data, widths):
+        t = Table([[para(v) for v in row] for row in data], colWidths=widths, repeatRows=1)
+        t.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#E9F0F8')),
+                               ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                               ('TOPPADDING', (0, 0), (-1, -1), 5),
+                               ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+                               ('LINEBELOW', (0, 0), (-1, -1), .4, colors.HexColor('#DDE3EB'))]))
+        return t
+
+    doc = doc or {"cases": list({r['case']['id']: r['case'] for r in rows}.values())}
+    planned = report_groups(rows, doc)
+    story = [Paragraph("모델별 비용·품질·시간 비교", title), Spacer(1, 12),
+             para("모델별 비용·품질과 소요시간을 분리했습니다. 선의 각 점은 동일 질문의 관측값입니다. 미실측 모델은 결과를 만들지 않습니다.")]
+    story.append(table([["모델", "진행 범위", "서비스", "질문 ID"]] +
+                       [[g['label'], coverage_text(g), ', '.join(SERVICE_NAMES.get(s,s) for s in g['services']),
+                         ', '.join(g['cases'])] for g in planned], [125, 210, 165, 260]))
+    overview = [["모델", "서비스", "공통 n", "품질 평균 /20", "비용 합계(KRW)", "완료 관측 상한 중앙값"]]
+    for g in planned:
+        if not g['rows']:
+            continue
+        for s in summaries(g, rates):
+            overview.append([g['label'], SERVICE_NAMES.get(s['service'],s['service']), s['n'],
+                             s['quality'], s['cost'], s['time']])
+    story.extend([Spacer(1, 12), para("동일 조건·공통 질문 교집합 요약 (파일 생성 제외, 속도 순위 아님)"),
+                  table(overview, [140, 115, 65, 140, 140, 160])])
+    warnings = assessment_warnings(rows)
+    for warning in warnings[:3]:
+        story.extend([Spacer(1, 6), para(warning)])
+    if len(warnings) > 3:
+        story.append(para(f"추가 평가 검토 {len(warnings)-3}건은 상세 PDF·엑셀을 확인하세요."))
+    if doc.get('report_scope', {}).get('origin') != 'init_snapshot':
+        story.append(para("실행 시작 시 계획이 고정되지 않아 현재 설정/기록으로 범위를 점검했습니다. 과거 승인 범위를 복원한 것은 아닙니다."))
+    plotted = []
+    for g in planned:
+        # File tools may route to another model. Keep every such charge in the
+        # function table below, never imply it is the selected model's cost.
+        selected = [dict(r, group=g['label']) for r in g['rows']
+                    if r['case']['id'] != 'file-generation-01' and r['result'].get('model_match') is not False]
+        plotted.extend(selected)
+    for group_name, group in chart_groups(plotted, rates).items():
         cases, services = group["cases"], group["services"]
         # Limit points per page to keep labels legible for larger question sets.
         for start in range(0, len(cases), 10):
-            if story:
-                story.append(PageBreak())
+            story.append(PageBreak())
             page_cases = cases[start:start + 10]
             part = f" · 질문 {start+1}–{start+len(page_cases)}" if len(cases) > 10 else ""
-            story.append(Paragraph(escape(f"{group_name} · 질문별 서비스 비교{part}"), title))
+            story.append(Paragraph(escape(f"{group_name} · 비용과 답변 품질{part}"), title))
             legend = Drawing(760, 25)
             for order, service in enumerate(services):
                 x = 53 + order * 170
@@ -192,9 +236,8 @@ def write_chart_pdf(path, rows, today, name, rates):
                 color = colors.HexColor(PALETTE[index % len(PALETTE)])
                 legend.add(Line(x, 11, x + 20, 11, strokeColor=color, strokeWidth=2))
                 legend.add(String(x + 28, 7, SERVICE_NAMES.get(service, service), fontName=font, fontSize=10))
-            story.extend([legend, _panel(page_cases, services, "cost", font), Spacer(1, 4),
-                          _panel(page_cases, services, "quality", font), Spacer(1, 4),
-                          _panel(page_cases, services, "time", font)])
+            story.extend([legend, _panel(page_cases, services, "cost", font), Spacer(1, 10),
+                          _panel(page_cases, services, "quality", font)])
             conditions = []
             for service, series in services.items():
                 entries = list(series.values())
@@ -207,9 +250,31 @@ def write_chart_pdf(path, rows, today, name, rates):
                     "관측 간격이 넓으면 속도 순위를 단정하지 않습니다.")
             if any(v["tier"] == "exploratory" for s in services.values() for v in s.values()):
                 note += " 탐색적 조건이 포함되어 있으며, 추론 설정이 다른 결과는 참고 비교입니다."
-            if "file-generation-01" in cases:
-                note += " *파일 생성은 도구·라우팅이 개입하는 서비스 기능 평가입니다."
             story.append(Paragraph(escape(note), body))
+            story.extend([PageBreak(), Paragraph(escape(f"{group_name} · 소요시간과 수치 대조{part}"), title),
+                          legend, _panel(page_cases, services, "time", font, height=200)])
+            matrix = [["질문", *[SERVICE_NAMES.get(s,s) for s in services]]]
+            for case in page_cases:
+                values = [CASE_NAMES.get(case, case)]
+                for series in services.values():
+                    point = series.get(case, {})
+                    cost = krw_text(point['cost']) if point.get('cost') is not None else '비용 미확인'
+                    quality = str(point['quality']) + '/20' if point.get('quality') is not None else '품질 미평가'
+                    values.append(f"{cost} · {quality} · {point.get('time_label') or '시간 미관측'}초")
+                matrix.append(values)
+            story.append(table(matrix, [100] + [660 / len(services)] * len(services)))
+            story.extend([Spacer(1, 8), para("시간 선의 점은 완료를 처음 확인한 상한입니다. 관측 구간이 겹치거나 넓으면 빠르다고 판정하지 않습니다. 파일 생성은 아래 별도 기능 결과에 포함합니다.")])
+    function_rows = [r for r in rows if r['case']['id'] == 'file-generation-01' or r['result'].get('model_match') is False]
+    if function_rows:
+        story.extend([PageBreak(), Paragraph("파일 생성·모델 전환: 서비스 기능 결과", title),
+                      para("선택 모델의 성능 평균·선그래프에서 분리했습니다. 실제 차감은 보존하며 파일 성공과 동일 모델 비교 가능성은 별개입니다.")])
+        for row in function_rows:
+            req, res = row['request'], row['result']
+            charge = converted_cost(res, req['service'], rates)
+            story.extend([Spacer(1, 14), para(f"{SERVICE_NAMES.get(req['service'],req['service'])} · 선택 {req['model']} / {req['reasoning']} · {krw_text(charge['krw']) if charge else '비용 미확인'}"),
+                          para(f"기록 상태: {res.get('status')} · 실제 모델: {res.get('actual_model', '별도 필드 미기록; 아래 관측 근거 참조')}"),
+                          para(res.get('limitations') or res.get('answer', '')[:650]),
+                          para(res.get('evidence', '근거 미기록'))])
 
     def footer(canvas, doc):
         canvas.setFont(font, 8)
