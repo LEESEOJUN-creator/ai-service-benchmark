@@ -12,6 +12,18 @@ CASE_NAMES = {"education-01": "교육", "business-01": "기획", "summary-01": "
 PALETTE = ["#507FEF", "#E35242", "#E7AC20", "#29A48B"]
 
 
+def _observed_time(result):
+    """Plot completion observation bounds, never invent an exact response time."""
+    upper = result.get("first_complete_observed_ms")
+    lower = result.get("last_generating_observed_ms")
+    if result.get("status") != "success" or upper is None:
+        return None, None, None
+    upper = upper / 1000
+    lower = lower / 1000 if lower is not None else None
+    label = f"≤{upper:.1f}" if lower is None else f"{lower:.1f}–{upper:.1f}"
+    return upper, lower, label
+
+
 def chart_groups(rows, rates):
     """Align services by question ID, never by each service's row position."""
     groups = {}
@@ -28,7 +40,9 @@ def chart_groups(rows, rates):
         assessment = item["assessment"]
         quality = (sum(c["score"] for c in assessment["criteria"])
                    if assessment and item["result"].get("status") == "success" else None)
+        upper, lower, time_label = _observed_time(item["result"])
         series[case] = {"cost": charge["krw"] if charge else None, "quality": quality,
+                        "time": upper, "time_lower": lower, "time_label": time_label,
                         "model": item["request"]["model"], "reasoning": item["request"]["reasoning"],
                         "tier": item["request"]["comparison_tier"]}
     return groups
@@ -66,13 +80,14 @@ def _panel(cases, services, metric, font):
     from reportlab.graphics.shapes import Drawing, Line, String, Circle, Rect, Polygon
     from reportlab.lib import colors
     from reportlab.pdfbase import pdfmetrics
-    width, height = 760, 198
+    width, height = 760, 138
     drawing = Drawing(width, height)
-    left, right, bottom, top = 53, 723, 29, 153
-    heading = "질문별 비용 (KRW · 원)" if metric == "cost" else "질문별 답변 품질 (20점 만점)"
-    drawing.add(String(left, 181, heading, fontName=font, fontSize=11, fillColor=colors.HexColor("#233C5A")))
+    left, right, bottom, top = 53, 723, 24, 99
+    heading = {"cost": "질문별 비용 (KRW · 원)", "quality": "질문별 답변 품질 (20점 만점)",
+               "time": "질문별 소요시간 (초 · 완료 관측 상한/구간)"}[metric]
+    drawing.add(String(left, 122, heading, fontName=font, fontSize=10, fillColor=colors.HexColor("#233C5A")))
     values = [series.get(case, {}).get(metric) for series in services.values() for case in cases]
-    ceiling = _cost_ceiling(values) if metric == "cost" else 20
+    ceiling = 20 if metric == "quality" else _cost_ceiling(values)
     for tick in range(5):
         value = ceiling * tick / 4
         y = bottom + (top - bottom) * tick / 4
@@ -84,8 +99,9 @@ def _panel(cases, services, metric, font):
     if len(cases) == 1:
         xs = [(left + right) / 2]
     for x, case in zip(xs, cases):
-        drawing.add(String(x, 11, CASE_NAMES.get(case, case), textAnchor="middle", fontName=font, fontSize=8))
+        drawing.add(String(x, 7, CASE_NAMES.get(case, case), textAnchor="middle", fontName=font, fontSize=8))
     boxes = []
+    leaders, labels = [], []
     missing = []
     for order, (service, series) in enumerate(services.items()):
         index = list(SERVICE_NAMES).index(service) if service in SERVICE_NAMES else order + 3
@@ -99,6 +115,12 @@ def _panel(cases, services, metric, font):
                 continue
             available += 1
             y = bottom + float(value) / ceiling * (top - bottom)
+            low = series.get(case, {}).get("time_lower") if metric == "time" else None
+            if low is not None:
+                low_y = bottom + low / ceiling * (top - bottom)
+                drawing.add(Line(x, low_y, x, y, strokeColor=color, strokeWidth=.6))
+                drawing.add(Line(x - 3, low_y, x + 3, low_y, strokeColor=color, strokeWidth=.6))
+                drawing.add(Line(x - 3, y, x + 3, y, strokeColor=color, strokeWidth=.6))
             if previous is not None:
                 drawing.add(Line(previous[0], previous[1], x, y, strokeColor=color,
                                  strokeWidth=1.7, strokeDashArray=([5, 2] if index == 1 else
@@ -111,7 +133,8 @@ def _panel(cases, services, metric, font):
             else:
                 drawing.add(Polygon([x, y + 4, x + 4, y, x, y - 4, x - 4, y],
                                     fillColor=color, strokeColor=colors.white, strokeWidth=.5))
-            label = krw_text(value).removesuffix("원") if metric == "cost" else str(value)
+            label = (krw_text(value).removesuffix("원") if metric == "cost" else
+                     series[case]["time_label"] if metric == "time" else str(value))
             text_width = pdfmetrics.stringWidth(label, font, 8)
             # Offset close/equal values so the labels remain readable.
             chosen = None
@@ -126,13 +149,18 @@ def _panel(cases, services, metric, font):
             if chosen:
                 ly, box = chosen
                 boxes.append(box)
-                drawing.add(Rect(box[0], box[1], box[2]-box[0], box[3]-box[1],
-                                 fillColor=colors.white, strokeColor=None))
-                drawing.add(String(x, ly, label, textAnchor="middle", fontName=font, fontSize=8, fillColor=color))
+                if abs(ly - y) > 12:
+                    leaders.append(Line(x, y, x, ly + 4, strokeColor=colors.HexColor("#C7D0DC"), strokeWidth=.4))
+                labels.append(Rect(box[0], box[1], box[2]-box[0], box[3]-box[1],
+                                   fillColor=colors.white, strokeColor=None))
+                labels.append(String(x, ly, label, textAnchor="middle", fontName=font, fontSize=8, fillColor=color))
         if available < len(cases):
             missing.append(f"{SERVICE_NAMES.get(service, service)} {len(cases)-available}개 미측정")
+    # Labels must be above every series, not hidden by a later service's line.
+    for shape in leaders + labels:
+        drawing.add(shape)
     if missing:
-        drawing.add(String(right, 181, " / ".join(missing), textAnchor="end", fontName=font,
+        drawing.add(String(right, 122, " / ".join(missing), textAnchor="end", fontName=font,
                            fontSize=8, fillColor=colors.HexColor("#68788B")))
     return drawing
 
@@ -164,8 +192,9 @@ def write_chart_pdf(path, rows, today, name, rates):
                 color = colors.HexColor(PALETTE[index % len(PALETTE)])
                 legend.add(Line(x, 11, x + 20, 11, strokeColor=color, strokeWidth=2))
                 legend.add(String(x + 28, 7, SERVICE_NAMES.get(service, service), fontName=font, fontSize=10))
-            story.extend([legend, _panel(page_cases, services, "cost", font), Spacer(1, 5),
-                          _panel(page_cases, services, "quality", font)])
+            story.extend([legend, _panel(page_cases, services, "cost", font), Spacer(1, 4),
+                          _panel(page_cases, services, "quality", font), Spacer(1, 4),
+                          _panel(page_cases, services, "time", font)])
             conditions = []
             for service, series in services.items():
                 entries = list(series.values())
@@ -173,7 +202,9 @@ def write_chart_pdf(path, rows, today, name, rates):
                 rate = f" · 1크레딧={krw_text(rates[service])}" if service in rates else ""
                 conditions.append(f"{SERVICE_NAMES.get(service, service)}: {', '.join(settings)}{rate}")
             story.append(Paragraph(escape(" | ".join(conditions)), body))
-            note = "가로축은 공통 질문 순서입니다. 비용 미노출·미평가 구간은 선을 끊고 0으로 표시하지 않습니다."
+            note = ("가로축은 공통 질문 순서이며 미측정은 선을 끊습니다. 시간 점은 성공 답변의 최초 완료 관측 상한, "
+                    "세로선은 마지막 생성 중~최초 완료 구간입니다. ≤는 상한만 관측한 경우입니다. "
+                    "관측 간격이 넓으면 속도 순위를 단정하지 않습니다.")
             if any(v["tier"] == "exploratory" for s in services.values() for v in s.values()):
                 note += " 탐색적 조건이 포함되어 있으며, 추론 설정이 다른 결과는 참고 비교입니다."
             if "file-generation-01" in cases:
@@ -187,5 +218,5 @@ def write_chart_pdf(path, rows, today, name, rates):
         canvas.drawRightString(landscape(A4)[0] - 40, 17, str(doc.page))
 
     SimpleDocTemplate(str(path), pagesize=landscape(A4), leftMargin=40, rightMargin=40,
-                      topMargin=25, bottomMargin=30, title="질문별 비용·품질 선그래프").build(
+                      topMargin=25, bottomMargin=30, title="질문별 비용·품질·소요시간 선그래프").build(
                           story, onFirstPage=footer, onLaterPages=footer)

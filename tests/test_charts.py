@@ -1,5 +1,5 @@
 import unittest
-from benchmark.charts import chart_groups
+from benchmark.charts import chart_groups, _observed_time
 from benchmark.costs import normalize_rates
 
 
@@ -29,3 +29,19 @@ class ChartTests(unittest.TestCase):
         row=self.row('monogpt','a')
         with self.assertRaisesRegex(ValueError,'중복 최종 결과'):
             chart_groups([row,row],{})
+
+    def test_time_preserves_observation_interval_in_seconds(self):
+        row=self.row('monogpt','a')
+        row['result'].update(last_generating_observed_ms=23100,first_complete_observed_ms=32500)
+        point=chart_groups([row],{})['model']['services']['monogpt']['a']
+        self.assertEqual((point['time'],point['time_lower'],point['time_label']),
+                         (32.5,23.1,'23.1–32.5'))
+
+    def test_upper_only_missing_and_failed_times_are_distinct(self):
+        self.assertEqual(_observed_time({'status':'success','first_complete_observed_ms':26400}),
+                         (26.4,None,'≤26.4'))
+        self.assertEqual(_observed_time({'status':'success'}),(None,None,None))
+        self.assertEqual(_observed_time({'status':'service_error','first_complete_observed_ms':7100}),
+                         (None,None,None))
+        self.assertEqual(_observed_time({'status':'success','first_complete_observed_ms':0,
+                                        'last_generating_observed_ms':0}),(0,0,'0.0–0.0'))
