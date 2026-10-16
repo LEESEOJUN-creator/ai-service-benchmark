@@ -1,4 +1,6 @@
-# 새 세션에서도 유지할 실행 정책
+# 추론 예외와 선택적 브라우저 보조 코드
+
+기본 진행 순서는 [실행 안내](REPRODUCIBLE-RUN.md)를 따릅니다. 이 문서는 추론 예외 정책과 선택적 Playwright 보조 코드만 설명합니다. 아래 JS 예시는 일반 CLI 측정의 필수 단계가 아닙니다.
 
 ## 추론 불일치: 자동 참고 비교 또는 한 번 확인
 
@@ -11,7 +13,9 @@
 
 `init --config local/실행설정.json`은 정책을 실행 기록에 고정합니다. 참고 비교의 reserve에는 같은 정규화 `model`/`model_group`, 사이트별 `reasoning`, `comparison_tier:"exploratory"`, 구체적 `mismatch_note`와 기존 `authorization_scope`를 기록합니다. `ask` 정책이면 실제 답변을 `mismatch_authorization`에도 적습니다. 정책은 추론 차이만 허용하며 프롬프트/첨부/기타 설정 차이는 허용하지 않습니다.
 
-브라우저 배치의 preflight에는 다음을 실제 확인 근거로 입력합니다. 코드가 UI를 대신 검증하지 않습니다.
+### 선택적 Playwright 배치의 설정
+
+`browser/batch.mjs`를 사용하는 경우에만 preflight에 다음을 실제 확인 근거로 입력합니다. 코드가 UI를 대신 검증하지 않습니다.
 
 ```js
 const preflight = {
@@ -26,7 +30,7 @@ const preflight = {
 
 `browser/batch.mjs`의 `resolveComparison`이 이 조건에서만 참고 비교를 선택합니다. 명시적 확인을 받은 경우 기존 `comparisonMode:'exploratory', userAuthorizedMismatch:true` 경로도 사용 가능합니다. 참고 결과는 비용·품질·시간 그래프와 별도 표시된 요약으로 내며 엄격 비교 평균과 합산하지 않습니다.
 
-## 시간: 전송부터 완료까지 외부에서 측정
+## 선택적 Playwright 시간 측정
 
 사이트에 소요시간 UI가 없어도 측정합니다. 도구가 지원하는 시계를 전송 직전과 완료 확인 직후에 읽습니다. UI 업로드/메뉴 설정은 전송 전에 끝냅니다. 정밀 내부 추론 시간이 아니라 자동화 관측 상한/구간임을 표시합니다.
 
@@ -53,4 +57,4 @@ const result = {kind:'result', request_id:requestId, status:'success',
 
 ## 완료 점검
 
-예정 모델별 실행/미실행 사유, 시간 관측 건수/성공 답변 수, 비용 관측 여부를 각각 보고합니다. 형식 테스트 통과를 실제 UI 실측 통과로 바꾸어 말하지 않습니다. 실제 데이터·원본·계정은 Git에 올리지 않습니다.
+[실행 안내의 전달 전 체크리스트](REPRODUCIBLE-RUN.md#4-생성과-완료를-구분한다)를 사용합니다. 형식 테스트 통과를 실제 UI 실측 통과로 바꾸어 말하지 않습니다. 실제 데이터·원본·계정은 Git에 올리지 않습니다.
