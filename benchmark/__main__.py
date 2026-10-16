@@ -5,11 +5,16 @@ from pathlib import Path
 from .planning import build_plan
 from .session import initialize, append_event, status
 from .reporting import report
+from .session import read_session
+from .audit import audit_session
 
 
 def main():
     parser = argparse.ArgumentParser(description="비교 계획·비공개 실행 기록·보고서 (실제 UI는 연결된 에이전트가 조작)")
-    parser.add_argument("command", choices=["plan", "init", "record", "status", "report"])
+    parser.add_argument("command", choices=["plan", "init", "record", "status", "report", "audit",
+                                           "timer-start", "timer-generating", "timer-complete"])
+    parser.add_argument("--request", help="예약된 request_id")
+    parser.add_argument("--evidence", help="현재 요청의 입력/생성/완료 UI 확인 근거")
     parser.add_argument("--config", default="config/benchmark.json")
     parser.add_argument("--run", default="comparison")
     parser.add_argument("--cases", default="cases/core.json")
@@ -29,6 +34,11 @@ def main():
                 result = append_event(root, args.run, json.loads(Path(args.event).read_text(encoding="utf-8")))
             elif args.command == "status":
                 result = status(root, args.run)
+            elif args.command == "audit":
+                result = audit_session(read_session(root, args.run))
+            elif args.command.startswith("timer-"):
+                result = append_event(root, args.run, {"kind": "timing", "request_id": args.request,
+                    "phase": args.command.removeprefix("timer-"), "evidence": args.evidence})
             else:
                 rates = json.loads(Path(args.rates).read_text(encoding="utf-8")) if args.rates else None
                 result = report(root, args.run, report_date=args.report_date, credit_rates=rates,

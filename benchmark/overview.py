@@ -2,6 +2,7 @@
 from statistics import mean, median
 
 from .costs import converted_cost, krw_text
+from .audit import summary_text
 
 SERVICE_NAMES = {"monogpt": "MonoGPT", "timely": "Timely AI", "chatgpt": "ChatGPT"}
 
@@ -74,8 +75,12 @@ def summaries(group, rates):
         if exploratory:
             notes.append("참고 비교: 사이트별 추론 설정이 다르거나 미공개입니다. 동일 조건 성능 순위가 아닙니다.")
         for r in items:
-            for c in r["assessment"]["criteria"]:
-                if c["score"] < 4:
+            if summary_text(r['assessment']):
+                notes.append(f"{r['case']['id']}: {summary_text(r['assessment'])}")
+            else:
+                criteria = [c for c in r['assessment']['criteria'] if c['score'] < 4]
+                if criteria:
+                    c = criteria[0]
                     notes.append(f"{r['case']['id']} / {c['criterion']}: {c['observation']} → {c['judgement']} ({c['evidence_ref']})")
         if not notes and items:
             c = items[0]["assessment"]["criteria"][0]

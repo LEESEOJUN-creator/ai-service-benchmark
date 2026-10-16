@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 from .planning import project_path, read_json
+from .timing import stamp_event, validate_timing, merge_timing, timing_fields
 
 
 def session_dir(root, name):
@@ -47,6 +48,7 @@ def append_event(root, name, event):
     fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     try:
         doc = read_session(root, name)
+        event = stamp_event(event) if event.get("kind") == "timing" else merge_timing(doc, event)
         validate_event(doc, event)
         if event.get("kind") == "reserve":
             for fixture in event.get("fixtures", {}).values():
@@ -74,12 +76,15 @@ def append_event(root, name, event):
 
 def validate_event(doc, event):
     kind = event.get("kind")
-    if kind not in {"reserve", "result", "assessment", "comparison", "ux", "note"}:
-        raise ValueError("kind: reserve/result/assessment/comparison/ux/note")
+    if kind not in {"reserve", "result", "assessment", "comparison", "ux", "note", "timing"}:
+        raise ValueError("kind: reserve/result/assessment/comparison/ux/note/timing")
     if kind == "comparison":
         for field in ("model_group", "case_id", "conclusion"):
             if not isinstance(event.get(field), str) or not event[field].strip():
                 raise ValueError("비교 해설에 모델 묶음·질문·결론 필요")
+        for field in ('common_ground', 'differences', 'practical_impact'):
+            if field in event and (not isinstance(event[field], str) or not event[field].strip()):
+                raise ValueError("비교 해설 상세 항목은 비어 있지 않은 문자열 필요")
         observations = event.get("observations")
         if not isinstance(observations, list) or len(observations) < 2:
             raise ValueError("비교 해설은 두 서비스 이상의 실제 관찰 필요")
@@ -97,9 +102,9 @@ def validate_event(doc, event):
             if reserve['service'] in seen:
                 raise ValueError("비교 해설 서비스 중복")
             seen.add(reserve['service'])
-        if any(e['kind'] == 'comparison' and e['model_group'] == event['model_group']
-               and e['case_id'] == event['case_id'] for e in doc['events']):
-            raise ValueError("비교 해설 덮어쓰기 금지; 정정 note 사용")
+        previous = [e for e in doc['events'] if e['kind'] == 'comparison'
+                    and e['model_group'] == event['model_group'] and e['case_id'] == event['case_id']]
+        validate_revision(previous, event)
         return
     if kind == "note":
         if not isinstance(event.get("text"), str) or not event["text"].strip():
@@ -124,6 +129,9 @@ def validate_event(doc, event):
     if not isinstance(key, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,99}", key):
         raise ValueError("유효한 request_id 필요")
     history = [x for x in doc["events"] if x.get("request_id") == key]
+    if kind == "timing":
+        validate_timing(history, event)
+        return
     if kind == "reserve":
         if history:
             raise ValueError("중복 전송 금지: 기존 request_id 확인 필요")
@@ -212,6 +220,10 @@ def validate_event(doc, event):
             raise ValueError("결과 상태 필요")
         if event["status"] == "success" and not event.get("answer"):
             raise ValueError("성공에는 원문이 필요합니다")
+        if 'answer_capture_verified' in event and type(event['answer_capture_verified']) is not bool:
+            raise ValueError("answer_capture_verified는 boolean")
+        if event.get('answer_capture_verified') and not str(event.get('capture_evidence') or '').strip():
+            raise ValueError("원문 추출 대조에는 화면·끝 문장·코드 본문 확인 근거 필요")
         if 'model_match' in event and type(event['model_match']) is not bool:
             raise ValueError("model_match는 boolean")
         if event.get('model_match') is False and (not event.get('actual_model') or not event.get('limitations')):
@@ -231,8 +243,13 @@ def validate_event(doc, event):
         result = next((x for x in history if x["kind"] == "result"), None)
         if result is None or result["status"] != "success":
             raise ValueError("성공 결과 기록 뒤에만 답변 평가 가능")
-        if any(x["kind"] == "assessment" for x in history):
-            raise ValueError("평가 덮어쓰기 금지; 정정 note를 추가하세요")
+        validate_revision([x for x in history if x['kind'] == 'assessment'], event)
+        if 'summary' in event:
+            from .audit import SUMMARY_FIELDS
+            summary = event['summary']
+            if not isinstance(summary, dict) or any(not isinstance(summary.get(k), str) or not summary[k].strip()
+                                                    for k in SUMMARY_FIELDS):
+                raise ValueError("summary: strength/weakness/practical_impact/evidence_ref 필요")
         if not isinstance(event.get("evaluator"), str) or not event["evaluator"].strip():
             raise ValueError("평가자 필요")
         if type(event.get("blind")) is not bool:
@@ -252,6 +269,18 @@ def validate_event(doc, event):
                     raise ValueError("각 기준에 관찰·판단·답변/검사 위치 근거 필요")
 
 
+def validate_revision(previous, event):
+    """Append a corrected evaluation without destroying its prior judgement."""
+    if previous:
+        if (type(event.get('supersedes_sequence')) is not int
+                or event['supersedes_sequence'] != previous[-1]['sequence']
+                or not isinstance(event.get('revision_reason'), str)
+                or not event['revision_reason'].strip()):
+            raise ValueError("덮어쓰기 금지; 최신 sequence를 supersedes_sequence로 참조하고 revision_reason 필요")
+    elif 'supersedes_sequence' in event:
+        raise ValueError("정정할 이전 평가 없음")
+
+
 def status(root, name):
     doc = read_session(root, name)
     reserved = {e["request_id"] for e in doc["events"] if e["kind"] == "reserve"}
@@ -259,6 +288,8 @@ def status(root, name):
     missing = [e["request_id"] for e in doc["events"] if e["kind"] == "result"
                and e.get("status") == "success" and e.get("first_complete_observed_ms") is None]
     return {"reserved": len(reserved), "recorded": len(finished),
+            "pending_clocks": {key: timing_fields([e for e in doc['events'] if e.get('request_id') == key])
+                               for key in sorted(reserved - finished)},
             "timing_missing_do_not_resend": missing,
             "timing_status": "incomplete" if missing else "observed" if finished else "not_started",
             "needs_reconciliation_do_not_resend": sorted(reserved - finished)}

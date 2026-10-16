@@ -7,6 +7,12 @@
 `README.md`, `docs/STATUS.md`, `docs/PROTOCOL.md`, `config/benchmark.json`.
 이전 대화나 특정 사용자의 환경을 알고 있다고 가정하지 마세요.
 
+## 새 세션의 필수 공통 경로
+
+`docs/REPRODUCIBLE-RUN.md`를 읽고 측정·기록·출력을 그대로 사용하세요. 기본 경로는 reserve → `timer-start` → 실제 UI 전송 1회 → 완료 확인 직후 `timer-complete` → result → assessment입니다. 시간은 record가 자동 병합합니다. 실행마다 임시 record_ui.py/타이머/보고서 빌더를 새로 작성하지 마세요. 브라우저 API가 다르면 UI 조작만 연결하세요. 매 요청 status를 확인하며 누락 복구를 위한 재전송은 하지 않습니다.
+
+평가는 `examples/review-example.json`의 가상 예시 수준으로 실제 근거를 작성하세요. assessment.summary의 강점·한계·실무 영향·근거, comparison의 공통 충족·차이·실무 영향을 채우고 `audit`으로 누락을 확인하세요. 저장 원문과 화면의 코드/표/마지막 문장을 대조한 경우에만 answer_capture_verified를 표시합니다. 평가를 보완하려면 정정 이벤트를 추가하며 과거 기록을 덮지 않습니다. audit는 유료 요청 차단이 아니라 보고서 보완 목록입니다.
+
 ## 비교 불변 조건
 
 - 기본 계획은 GPT 8문항×3사(24회), Claude·Gemini 각각 교육·기획·이미지·파일 분석 4문항×2사(각 8회), 총 40회입니다. 첨부 검토·활성화 후의 목표이며 지원 모델과 조건은 현재 UI에서 확인합니다. 8문항 전체×세 모델은 56회이므로 40회 안에서 완료했다고 말하지 마세요. 모델을 끄고 GPT만 실행한 것은 전체 모델 완료가 아닙니다.

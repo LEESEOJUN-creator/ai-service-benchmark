@@ -22,15 +22,20 @@
 
 ## 상태 기록 명령
 
+신규 실행의 전체 순서와 보고서 품질 예시는 [새 세션 표준 경로](REPRODUCIBLE-RUN.md)를 우선 따릅니다. 아래 기록 명령 사이에 전송 직전 `timer-start`, 완료 UI 확인 직후 `timer-complete`가 들어갑니다. 별도의 측정·보고서 코드를 만들지 않습니다.
+
 ```sh
 python3 -m benchmark init --run pilot
 python3 -m benchmark record --run pilot --event runs/pilot/reserve.json
+python3 -m benchmark timer-start --run pilot --request mono-summary --evidence "현재 요청 입력·설정 확인"
 # 위 기록이 성공한 뒤 실제 UI 전송 1회
+python3 -m benchmark timer-complete --run pilot --request mono-summary --evidence "현재 답변 완료 UI 확인"
 python3 -m benchmark record --run pilot --event runs/pilot/result.json
 # 각 성공 답변의 기준별 평가와 서비스별 UX 관찰을 별도 이벤트로 기록
 python3 -m benchmark record --run pilot --event runs/pilot/assessment.json
 python3 -m benchmark record --run pilot --event runs/pilot/ux.json
 python3 -m benchmark status --run pilot
+python3 -m benchmark audit --run pilot
 python3 -m pip install -r requirements-report.txt
 python3 -m benchmark report --run pilot --rates local/credit-rates.json
 ```
@@ -48,6 +53,8 @@ python3 -m benchmark report --run pilot --rates local/credit-rates.json
 ### result 이벤트
 
 필수: `kind=result`, 같은 `request_id`, `status`, 성공 시 `answer`, `cost_status`. 선택: `cost`, `cost_unit`, `cost_components`, `last_generating_observed_ms`, `first_complete_observed_ms`, `quality_note`, `limitations`, `evidence`.
+
+영속 타이머 경로에서는 시간 필드를 수동 입력하지 않습니다. record가 같은 요청의 시계에서 자동 병합합니다. 원문 추출을 UI와 대조했다면 `answer_capture_verified:true`, `capture_evidence`를 함께 적습니다. 검증 전에는 true로 만들지 않습니다.
 
 미확정 비용은 null입니다. `cost_status`는 `ledger_verified`, `balance_observed`, `contaminated`, `pending`, `unavailable` 중 하나입니다. 실패·미지원도 비용이 들 수 있습니다. 미측정을 0으로 채우지 않습니다.
 

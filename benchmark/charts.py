@@ -5,6 +5,7 @@ from xml.sax.saxutils import escape
 
 from .costs import converted_cost, krw_text
 from .overview import report_groups, coverage_text, summaries, assessment_warnings
+from .audit import audit_warnings
 
 SERVICE_NAMES = {"monogpt": "MonoGPT", "timely": "Timely AI", "chatgpt": "ChatGPT"}
 CASE_NAMES = {"education-01": "교육", "business-01": "기획", "summary-01": "요약",
@@ -211,7 +212,7 @@ def write_chart_pdf(path, rows, today, name, rates, doc=None):
                              s['quality'], s['cost'], s['time']])
     story.extend([Spacer(1, 12), para("공통 질문 교집합 요약 (파일 생성 제외, 참고 비교는 별도 표시·엄격 비교와 합산하지 않음)"),
                   table(overview, [140, 115, 65, 140, 140, 160])])
-    warnings = assessment_warnings(rows)
+    warnings = assessment_warnings(rows) + audit_warnings(doc or {'events': [], 'cases': []})
     for warning in warnings[:3]:
         story.extend([Spacer(1, 6), para(warning)])
     if len(warnings) > 3:

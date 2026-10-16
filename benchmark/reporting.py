@@ -12,6 +12,7 @@ from xml.sax.saxutils import escape
 from .costs import converted_cost, krw_text, normalize_rates
 from .session import read_session
 from .overview import report_groups, coverage_text, summaries, assessment_warnings
+from .audit import audit_session, audit_warnings, summary_text, comparison_text
 
 SERVICE_NAMES = {"monogpt": "MonoGPT", "timely": "Timely AI", "chatgpt": "ChatGPT"}
 
@@ -160,9 +161,9 @@ def _write_xlsx(path, rows, doc, today, name, rates):
             reason = [f"{c['criterion']}: {c['observation']} → {c['judgement']} (근거: {c['evidence_ref']})" for c in selected[:2]]
             values.append("\n".join([f"{req['model']} · 추론 {req['reasoning']}",
                                       f"품질 {score} · {_cost(res, req['service'], rates)} · {_time(res)}",
-                                      f"상태 {_text(res.get('status'))}", *reason]))
+                                      f"상태 {_text(res.get('status'))}", summary_text(assessment), *reason]))
         narrative = comparisons.get((group, case_id))
-        values.append(narrative['conclusion'] + '\n' + '\n'.join(
+        values.append(comparison_text(narrative) + '\n' + '\n'.join(
             f"{o['request_id']}: {o['observation']} ({o['evidence_ref']})" for o in narrative['observations'])
             if narrative else "비교 해설 미기록 — 같은 점수라도 답변 구성·제안·실무 영향의 차이는 별도 검토 필요")
         add(compare, values, 190)
@@ -251,7 +252,7 @@ def _write_xlsx(path, rows, doc, today, name, rates):
         for service, reason in group['excluded'].items():
             add(overview, [group['label'], "설정상 비교 대상 제외 · 현재 메뉴 근거 확인 필요",
                            SERVICE_NAMES.get(service, service), None, None, None, None, None, reason], 50)
-    for warning in assessment_warnings(rows):
+    for warning in assessment_warnings(rows) + audit_warnings(doc):
         add(overview, ["평가 검토", warning], 55)
     if doc.get("report_scope", {}).get("origin") != "init_snapshot":
         add(overview, ["범위 주의", "실행 시작 시 계획 미고정. 현재 설정을 참고한 누락 점검이며 과거 승인 범위를 의미하지 않습니다."], 65)
@@ -272,7 +273,7 @@ def _write_pdf(path, rows, doc, today, name, rates):
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether
 
     font = "BenchmarkKorean"
     candidates = ["/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
@@ -290,9 +291,9 @@ def _write_pdf(path, rows, doc, today, name, rates):
     ink, navy = colors.HexColor("#203047"), colors.HexColor("#193B63")
     body = ParagraphStyle("body", fontName=font, fontSize=9, leading=14, textColor=ink, wordWrap="CJK")
     small = ParagraphStyle("small", parent=body, fontSize=8, leading=12)
-    heading = ParagraphStyle("heading", parent=body, fontSize=18, leading=26, textColor=navy, spaceAfter=12)
+    heading = ParagraphStyle("heading", parent=body, fontSize=18, leading=26, textColor=navy, spaceAfter=12, keepWithNext=True)
     sub = ParagraphStyle("sub", parent=body, fontSize=12, leading=19, textColor=navy,
-                         spaceBefore=15, spaceAfter=7)
+                         spaceBefore=15, spaceAfter=7, keepWithNext=True)
 
     def p(value, style=body):
         return Paragraph(escape(_text(value)).replace("\n", "<br/>"), style)
@@ -326,7 +327,7 @@ def _write_pdf(path, rows, doc, today, name, rates):
     story.append(table(coverage, [110, 170, 227]))
     if doc.get("report_scope", {}).get("origin") != "init_snapshot":
         story.append(p("시작 시 계획 미고정: 현재 설정을 참고한 누락 점검입니다. 과거 승인 범위나 전체 완료를 뜻하지 않습니다.", small))
-    for warning in assessment_warnings(rows):
+    for warning in assessment_warnings(rows) + audit_warnings(doc):
         story.append(p(warning, small))
     for group in report_groups(rows, doc):
         story.extend([PageBreak(), p(group['label'] + " · 서비스 비교 요약", heading), p(coverage_text(group))])
@@ -377,15 +378,15 @@ def _write_pdf(path, rows, doc, today, name, rates):
     story.append(table(summary, [72, 74, 135, 87, 75, 64]))
     story.extend([Spacer(1, 10),
                   p("각 판단의 실제 관찰·감점 이유는 아래에, 전체 답변 원문은 동봉한 엑셀에 있습니다.", small)])
-    comparisons = [e for e in doc['events'] if e['kind'] == 'comparison']
+    comparisons = list({(e['model_group'], e['case_id']): e for e in doc['events'] if e['kind'] == 'comparison'}.values())
     story.extend([PageBreak(), p("서비스 간 답변 차이와 실무 영향", heading)])
     if not comparisons:
         story.append(p("비교 해설 미기록. 개별 채점표만 있으며 동점 답변의 제안·구성·실무 영향은 평가되지 않았습니다. 상세 채점표의 존재만으로 비교 분석 완료라고 보지 않습니다."))
     for event in comparisons:
-        story.extend([p(event['model_group'] + ' · ' + event['case_id'], sub), p(event['conclusion'])])
-        story.append(table([["요청", "실제 차이", "근거"]] +
+        story.append(KeepTogether([p(event['model_group'] + ' · ' + event['case_id'], sub), p(comparison_text(event)),
+                           table([["요청", "실제 차이", "근거"]] +
                            [[o['request_id'], o['observation'], o['evidence_ref']] for o in event['observations']],
-                           [120, 260, 127]))
+                           [120, 260, 127])]))
     for item in rows:
         req, res, assessment = item["request"], item["result"], item["assessment"]
         story.extend([PageBreak(),
@@ -394,6 +395,8 @@ def _write_pdf(path, rows, doc, today, name, rates):
                         f"{_cost(res, req['service'], rates)} / {_time(res)}"),
                       p("답변 평가", sub)])
         if assessment:
+            if summary_text(assessment):
+                story.append(p(summary_text(assessment)))
             story.append(p(f"평가자: {assessment['evaluator']} · 블라인드: {'예' if assessment['blind'] else '아니오'}", small))
             criteria = [["평가 기준", "점수", "확인한 사실과 위치", "판단·감점 이유"]]
             for c in assessment["criteria"]:
@@ -480,5 +483,6 @@ def report(root, name, *, report_date=None, credit_rates=None, output_dir=None):
     return {"report": str(pdf), "workbook": str(xlsx), "chart": str(chart), "records": len(rows),
             "timing_missing": [r['request']['request_id'] for r in rows if r['result'].get('status') == 'success'
                                and r['result'].get('first_complete_observed_ms') is None],
-            "warnings": assessment_warnings(rows),
+            "warnings": assessment_warnings(rows) + audit_warnings(doc),
+            "review": audit_session(doc),
             "private": True, "external_upload": False}

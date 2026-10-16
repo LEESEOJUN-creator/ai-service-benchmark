@@ -30,7 +30,7 @@ const preflight = {
 
 사이트에 소요시간 UI가 없어도 측정합니다. 도구가 지원하는 시계를 전송 직전과 완료 확인 직후에 읽습니다. UI 업로드/메뉴 설정은 전송 전에 끝냅니다. 정밀 내부 추론 시간이 아니라 자동화 관측 상한/구간임을 표시합니다.
 
-권장 경로는 `browser/observe.mjs`입니다. 사용 중인 도구 문서가 이 보조 모듈 API를 지원하는지 먼저 확인합니다. 미지원이면 현재 도구의 클릭·스냅샷과 외부 시계로 같은 필드를 기록하며, 보조 모듈 사용 불가를 시간 측정 포기의 이유로 삼지 않습니다.
+새 세션의 기본 경로는 `docs/REPRODUCIBLE-RUN.md`의 영속 `timer-start`/`timer-complete`입니다. 브라우저 종류와 무관하게 기존 record에 자동 연결되므로 별도 타이머/기록 프로그램을 만들지 않습니다. 아래 `browser/observe.mjs`는 도구 문서가 해당 API를 지원하는 환경에서만 쓰는 검증된 대체 경로이며 같은 요청에 두 타이머를 혼용하지 않습니다.
 
 ```js
 const state = await sendOnce({tab, service, prompt, textboxName, persist,

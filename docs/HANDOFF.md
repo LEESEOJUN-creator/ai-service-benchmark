@@ -1,5 +1,9 @@
 # 다른 사용자에게 전달하기
 
+## 새 세션 전달 시 우선 적용
+
+`docs/REPRODUCIBLE-RUN.md`와 `examples/review-example.json`을 함께 읽습니다. 브라우저 UI 조작 외에 측정·원장·출력기를 새로 만들지 않습니다. 영속 timer-start/timer-complete, record 자동 병합, audit 보완, report 공통 출력 경로를 사용합니다. 예시는 가상이며 개인 실측 자료를 공유할 필요가 없습니다.
+
 ## 필요한 것
 
 - 공용 파일을 받은 로컬 프로젝트 폴더와 Python 3.9 이상. JS 회귀 검사는 Node가 필요하다. 최종 PDF·XLSX·그래프 PDF 출력에는 `requirements-report.txt` 설치가 필요하다.
@@ -22,7 +26,7 @@
 
 ## 배포 시 포함/제외
 
-포함: README, AGENTS, benchmark, browser, cases, config의 공용 템플릿, docs, prompts, sites, tests, 빈 fixtures/manifest.json, .gitignore.
+포함: README, AGENTS, benchmark, browser, cases, config의 공용 템플릿, docs, examples의 가상 평가 예시, prompts, sites, tests, 빈 fixtures/manifest.json, .gitignore.
 
 제외: runs, local, .auth, fixtures/local, 계정·쿠키·브라우저 프로필·실제 원문·스크린샷·개인 보고서. 배포 직전에 `git ls-files runs local .auth fixtures/local`이 비어 있는지 확인한다. Git ignore는 이미 추적된 비밀을 자동으로 제거하지 않는다.
 
