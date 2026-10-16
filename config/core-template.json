@@ -7,6 +7,7 @@
   "budget_krw_per_service": null,
   "max_total_requests": 40,
   "auto_top_up": false,
+  "reasoning_mismatch_policy": "auto_exploratory",
   "models": [
     {"id":"gpt-6-sol-candidate","report_label":"GPT-6 Sol","requested_name":"GPT-6 Sol / medium","enabled":true,"services":["monogpt","timely","chatgpt"],"excluded_services":{}},
     {"id":"claude-sonnet-55-candidate","report_label":"Claude Sonnet 5.5","requested_name":"Claude Sonnet 5.5 (추론 조건 확인 필요)","enabled":true,"case_ids":["education-01","business-01","image-01","file-01"],"services":["monogpt","timely"],"excluded_services":{"chatgpt":"공급자 모델 미제공; 실제 메뉴 재확인 필요"}},

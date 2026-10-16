@@ -22,6 +22,7 @@ class PlanningTests(unittest.TestCase):
         # Keep legacy smoke fixtures explicit; production defaults use core-v2.
         config=self.read('config/benchmark.json')
         config['case_file']='cases/smoke.json'
+        config['reasoning_mismatch_policy']='ask'
         for model in config['models']:
             model['enabled']=model['id']=='gemini-candidate'
             model.pop('services',None);model.pop('excluded_services',None)
@@ -86,6 +87,22 @@ class PlanningTests(unittest.TestCase):
         self.assertFalse(plan["live_execution_implemented"])
         self.assertEqual(plan["planned_cost_upper_bound_krw"]["monogpt"], "6")
         self.assertTrue(any("백엔드" in warning for warning in plan["warnings"]))
+
+    def test_auto_exploratory_plan_does_not_block_reasoning_only_difference(self):
+        self.configured()
+        config=self.read('config/benchmark.json')
+        config['reasoning_mismatch_policy']='auto_exploratory'
+        self.write('config/benchmark.json',config)
+        profile=self.read('sites/timely.json')
+        profile['models']['gemini-candidate']['reasoning']['level']='unknown'
+        self.write('sites/timely.json',profile)
+        plan=build_plan(self.root)
+        self.assertEqual(plan['status'],'ready_for_implementation')
+        self.assertEqual(plan['comparison_groups'][0]['comparison_mode'],'exploratory')
+        self.assertFalse(plan['comparison_groups'][0]['conditions_match'])
+        profile['models']['gemini-candidate']['version']='different'
+        self.write('sites/timely.json',profile)
+        self.assertEqual(build_plan(self.root)['status'],'blocked')
 
     def test_model_reasoning_and_features_mismatch_block(self):
         self.configured()

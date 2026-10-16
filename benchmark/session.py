@@ -30,6 +30,7 @@ def initialize(root, name, case_file="cases/core.json", config_file="config/benc
     if project_path(root, config_file).is_file():
         config = read_json(root, config_file)
         payload["report_scope"] = {"models": config["models"], "origin": "init_snapshot"}
+        payload["execution_policy"] = {"reasoning_mismatch": config.get("reasoning_mismatch_policy", "ask")}
     with (folder / "session.json").open("x", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
     return {"status": "created", "path": str(folder), "browser_execution": False}
@@ -53,6 +54,11 @@ def append_event(root, name, event):
                 if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != fixture["sha256"]:
                     raise ValueError("첨부 직전 파일 바이트/경로 불일치")
         event = dict(event, sequence=len(doc["events"]) + 1)
+        if event.get("kind") == "result" and event.get("status") == "success":
+            observed = event.get("first_complete_observed_ms") is not None
+            event["timing_status"] = "observed" if observed else "unavailable"
+            if not observed and not event.get("timing_unavailable_reason"):
+                event["timing_unavailable_reason"] = "전송/완료 시각 기록 누락 — 시간 측정 미완료; 재전송 금지"
         doc["events"].append(event)
         temporary = folder / ".session.tmp"
         with temporary.open("w", encoding="utf-8") as handle:
@@ -151,6 +157,12 @@ def validate_event(doc, event):
             raise ValueError("제외 서비스와 검증된 사유 필요")
         if event["reasoning"] in {"unknown", "not_exposed"} and event["comparison_tier"] != "exploratory":
             raise ValueError("미공개 추론을 동일 조건으로 처리할 수 없음")
+        if event["comparison_tier"] == "exploratory":
+            if not isinstance(event.get("mismatch_note"), str) or not event["mismatch_note"].strip():
+                raise ValueError("참고 비교에는 사이트별 설정 차이·미확인 사유 필요")
+            automatic = doc.get("execution_policy", {}).get("reasoning_mismatch") == "auto_exploratory"
+            if not automatic and not str(event.get("mismatch_authorization") or "").strip():
+                raise ValueError("참고 비교 확인 필요: 한 번 질문하고 승인 근거를 mismatch_authorization에 기록; 모델 생략 금지")
         if not isinstance(event.get("feature_settings"), dict) or not event["feature_settings"]:
             raise ValueError("검색·도구 등 설정 기록 필요")
         for fixture_id in case["fixture_ids"]:
@@ -179,10 +191,18 @@ def validate_event(doc, event):
             raise ValueError("같은 서비스에 미확정 전송이 있음; 먼저 대화와 비용 확인")
         # Conditions cannot drift within a declared matched comparison group.
         for e in reserves:
+            same_group = ((e.get('model_group') or e['model']) == (event.get('model_group') or event['model']))
+            if same_group and e['model'] != event['model']:
+                raise ValueError("같은 비교 묶음의 모델 변경 금지; 정규화 모델명을 유지하세요")
             if e["case_id"] == event["case_id"] and e["model"] == event["model"]:
                 for field in ("prompt_sha256", "reasoning", "fixtures", "feature_settings"):
+                    if (field == "reasoning" and e.get("comparison_tier") == "exploratory"
+                            and event["comparison_tier"] == "exploratory"):
+                        continue
                     if e.get(field) != event.get(field):
                         raise ValueError("비교 조건 변경: " + field)
+                if e.get("comparison_tier") != event["comparison_tier"]:
+                    raise ValueError("엄격·참고 비교를 같은 묶음에 혼합하지 마세요")
     elif kind == "result":
         if not history or history[0]["kind"] != "reserve":
             raise ValueError("전송 예약 없는 결과")
@@ -236,5 +256,9 @@ def status(root, name):
     doc = read_session(root, name)
     reserved = {e["request_id"] for e in doc["events"] if e["kind"] == "reserve"}
     finished = {e["request_id"] for e in doc["events"] if e["kind"] == "result"}
+    missing = [e["request_id"] for e in doc["events"] if e["kind"] == "result"
+               and e.get("status") == "success" and e.get("first_complete_observed_ms") is None]
     return {"reserved": len(reserved), "recorded": len(finished),
+            "timing_missing_do_not_resend": missing,
+            "timing_status": "incomplete" if missing else "observed" if finished else "not_started",
             "needs_reconciliation_do_not_resend": sorted(reserved - finished)}

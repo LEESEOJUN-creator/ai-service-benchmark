@@ -2,6 +2,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -189,3 +190,63 @@ class SessionTests(unittest.TestCase):
             append_event(self.root,'test-run',other)
     def test_result_requires_reservation(self):
         with self.assertRaises(ValueError): append_event(self.root,'test-run',dict(kind='result',request_id='absent',status='timeout',cost_status='unavailable'))
+
+    def test_missing_time_is_preserved_and_status_warns(self):
+        self.success()
+        self.assertEqual(status(self.root,'test-run')['timing_missing_do_not_resend'],['mono-summary'])
+        from benchmark.session import read_session
+        result=read_session(self.root,'test-run')['events'][-1]
+        self.assertEqual(result['timing_status'],'unavailable')
+        self.assertIn('재전송 금지',result['timing_unavailable_reason'])
+
+    def test_upper_only_time_is_valid(self):
+        append_event(self.root,'test-run',self.event)
+        append_event(self.root,'test-run',dict(kind='result',request_id='mono-summary',status='success',
+          answer='measured',cost_status='unavailable',first_complete_observed_ms=2500,last_generating_observed_ms=None))
+        self.assertEqual(status(self.root,'test-run')['timing_missing_do_not_resend'],[])
+
+    @unittest.skipUnless(importlib.util.find_spec('openpyxl') and importlib.util.find_spec('reportlab'),
+                         'PDF/XLSX optional dependencies not installed')
+    def test_browser_timing_fields_reach_report_and_graph(self):
+        if not shutil.which('node'):
+            self.skipTest('Node is optional; required only for browser integration regression')
+        import subprocess
+        from openpyxl import load_workbook
+        from benchmark.reporting import _rows
+        from benchmark.session import read_session
+        from benchmark.charts import chart_groups
+        script = """
+import {timingResult} from './browser/observe.mjs';
+console.log(JSON.stringify(timingResult({firstCompleteObservedMs:32500,lastGeneratingObservedMs:23100,
+  startedAt:'synthetic-send',completedAt:'synthetic-complete',observations:[{},{}]})));
+"""
+        timing=json.loads(subprocess.check_output(['node','--input-type=module','-e',script],
+                          cwd=Path(__file__).resolve().parents[1],text=True))
+        append_event(self.root,'test-run',self.event)
+        append_event(self.root,'test-run',dict(kind='result',request_id='mono-summary',status='success',
+          answer='synthetic measured answer',cost_status='unavailable',**timing))
+        append_event(self.root,'test-run',self.assessment())
+        output=report(self.root,'test-run',output_dir=self.root/'exports')
+        self.assertEqual(output['timing_missing'],[])
+        book=load_workbook(output['workbook'])
+        self.assertIn('23.1~32.5초',book['실측 원장']['O5'].value)
+        point=chart_groups(_rows(read_session(self.root,'test-run')),{})['common-model']['services']['monogpt']['summary-01']
+        self.assertEqual(point['time_label'],'23.1–32.5')
+
+    def test_authorized_exploratory_reasoning_can_differ_but_other_settings_cannot(self):
+        first=dict(self.event,comparison_tier='exploratory',reasoning='unknown',
+                   mismatch_note='default vs medium',mismatch_authorization='user explicitly allowed')
+        append_event(self.root,'test-run',first)
+        other=dict(first,request_id='timely-summary',service='timely',reasoning='medium')
+        with self.assertRaisesRegex(ValueError,'feature_settings'):
+            append_event(self.root,'test-run',dict(other,feature_settings={'search':'on'}))
+        append_event(self.root,'test-run',other)
+
+    def test_auto_policy_is_frozen_and_allows_exploratory_without_repeat_question(self):
+        (self.root/'config').mkdir()
+        (self.root/'config/benchmark.json').write_text(json.dumps({'models':[],
+          'reasoning_mismatch_policy':'auto_exploratory'}))
+        initialize(self.root,'automatic')
+        append_event(self.root,'automatic',dict(self.event,comparison_tier='exploratory',reasoning='unknown',mismatch_note='default vs medium'))
+        with self.assertRaisesRegex(ValueError,'확인 필요'):
+            append_event(self.root,'test-run',dict(self.event,comparison_tier='exploratory',reasoning='unknown',mismatch_note='default vs medium'))

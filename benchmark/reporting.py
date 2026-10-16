@@ -243,7 +243,7 @@ def _write_xlsx(path, rows, doc, today, name, rates):
     setup(overview, ["모델", "진행 범위", "서비스", "공통 질문 수", "품질 평균 /20",
                      "공통 질문 비용 합계(KRW)", "완료 관측 상한 중앙값", "만점/평가", "답변 차이·평가 근거"],
           [26, 40, 20, 14, 24, 24, 24, 16, 100])
-    overview.cell(3, 1, "생성 시점 요약. 원장 변경 시 report 재생성. 파일 생성·탐색 조건은 평균에서 제외. 속도 순위 아님.")
+    overview.cell(3, 1, "생성 시점 요약. 원장 변경 시 report 재생성. 파일 생성 제외. 참고 비교는 별도 표시하며 엄격 비교와 합산하지 않음. 속도 순위 아님.")
     for group in report_groups(rows, doc):
         for entry in summaries(group, rates):
             add(overview, [group['label'], coverage_text(group), SERVICE_NAMES.get(entry['service'], entry['service']),
@@ -330,7 +330,7 @@ def _write_pdf(path, rows, doc, today, name, rates):
         story.append(p(warning, small))
     for group in report_groups(rows, doc):
         story.extend([PageBreak(), p(group['label'] + " · 서비스 비교 요약", heading), p(coverage_text(group))])
-        story.append(p("같은 질문에서 모든 대상 서비스의 성공·평가·UI 조건 일치가 확인된 교집합만 집계합니다. 파일 생성은 별도 기능 평가이며, 비용 미노출은 무료가 아닙니다. 완료 관측 상한 중앙값은 실제 응답시간 순위가 아닙니다.", small))
+        story.append(p("같은 질문에서 모든 대상 서비스의 성공·평가가 확인된 교집합을 집계합니다. 추론이 다른 참고 비교는 별도 표시하며 동일 조건 평균과 합산하지 않습니다. 파일 생성은 별도 기능 평가이며, 비용 미노출은 무료가 아닙니다. 완료 관측 상한 중앙값은 실제 응답시간 순위가 아닙니다.", small))
         matrix = [["서비스", "공통 질문", "품질 평균", "비용 합계", "관측 상한 중앙값", "만점/평가"]]
         entries = summaries(group, rates)
         for entry in entries:
@@ -478,4 +478,7 @@ def report(root, name, *, report_date=None, credit_rates=None, output_dir=None):
     except ImportError as exc:
         raise ValueError("PDF·XLSX 출력에는 requirements-report.txt 설치가 필요합니다") from exc
     return {"report": str(pdf), "workbook": str(xlsx), "chart": str(chart), "records": len(rows),
+            "timing_missing": [r['request']['request_id'] for r in rows if r['result'].get('status') == 'success'
+                               and r['result'].get('first_complete_observed_ms') is None],
+            "warnings": assessment_warnings(rows),
             "private": True, "external_upload": False}

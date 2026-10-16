@@ -31,6 +31,10 @@ export async function sendOnce({tab, service, prompt, textboxName, persist, rese
     startedAt: new Date().toISOString(), observations: [], sendActionReturned: false};
   await persist(state); // MUST finish before the paid side effect.
   state.startedMonotonic = performance.now();
+  state.clockOrigin = performance.timeOrigin;
+  state.startedEpochMs = Date.now();
+  state.startedAt = new Date(state.startedEpochMs).toISOString();
+  await persist(state); // Durable timer before click; survives REPL loss.
   try {
     await button.click();
     state.sendActionReturned = true;
@@ -44,13 +48,12 @@ export async function sendOnce({tab, service, prompt, textboxName, persist, rese
 }
 
 export async function observeWindow({tab, state, persist, windowMs = 20000}) {
-  if (!state.sendActionReturned || !Number.isFinite(state.startedMonotonic))
+  if (!state.sendActionReturned || (!Number.isFinite(state.startedMonotonic) && !Number.isFinite(state.startedEpochMs)))
     throw new Error('Live clock missing; reconcile UI, do not manufacture elapsed time');
   if (!(windowMs > 0 && windowMs <= 30000)) throw new Error('Observation window must be <=30s');
   const c = serviceControls[state.service], deadline = performance.now() + windowMs;
   do {
     const snapshot = await tab.playwright.domSnapshot();
-    const elapsed = performance.now() - state.startedMonotonic;
     const promptSeen = snapshot.includes(state.prompt);
     const stopped = c.stop ? snapshot.includes(`button "${c.stop}"`) :
       (state.service === 'timely' && snapshot.includes('status: 답변을 생성하고 있습니다.'));
@@ -60,10 +63,18 @@ export async function observeWindow({tab, state, persist, windowMs = 20000}) {
     const complete = promptSeen && !stopped && (copied ||
       (state.service === 'timely' && snapshot.includes('status: '+c.completeText)
        && snapshot.includes('message control button') && snapshot.includes('img "copy"')));
+    // Timestamp AFTER all completion checks, not before the snapshot/copy call.
+    const liveClock = Number.isFinite(state.startedMonotonic) &&
+      (state.clockOrigin === undefined || state.clockOrigin === performance.timeOrigin);
+    const elapsed = liveClock ? performance.now() - state.startedMonotonic : Date.now() - state.startedEpochMs;
+    if (!Number.isFinite(elapsed) || elapsed < 0) throw new Error('Invalid clock; reconcile without resending');
+    state.timingMethod = liveClock ? 'monotonic_ui_observation' : 'wall_clock_ui_observation_after_resume';
     state.observations.push({elapsedMs:elapsed, generating:stopped, complete});
     if (stopped) state.lastGeneratingObservedMs = elapsed;
     if (complete) {
       state.firstCompleteObservedMs = elapsed;
+      state.completedAt = new Date().toISOString();
+      Object.assign(state, timingResult(state));
       state.status = 'completion_observed';
       await persist(state);
       return state;
@@ -74,4 +85,22 @@ export async function observeWindow({tab, state, persist, windowMs = 20000}) {
   state.status = 'still_observing';
   await persist(state);
   return state; // Resume observation, never send again. Agent reports progress.
+}
+
+/** Merge into the journal result AFTER other fields. No hand-copied field names. */
+export function timingResult(state) {
+  const upper = state.firstCompleteObservedMs;
+  const lower = state.lastGeneratingObservedMs;
+  if (!Number.isFinite(upper) || upper < 0) return {
+    timing_status: 'unavailable', first_complete_observed_ms: null,
+    last_generating_observed_ms: null,
+    timing_unavailable_reason: 'Completion was not observed with a valid send clock; do not resend to repair timing.',
+  };
+  if (lower != null && (!Number.isFinite(lower) || lower < 0 || lower > upper))
+    throw new Error('Invalid observation interval');
+  return {timing_status: 'observed', first_complete_observed_ms: upper,
+    last_generating_observed_ms: lower ?? null, sent_at: state.startedAt,
+    completed_at: state.completedAt, timing_method: state.timingMethod ?? 'monotonic_ui_observation',
+    timing_evidence: `send clock + ${state.observations?.length ?? 0} UI observations`,
+    timing_unavailable_reason: null};
 }

@@ -45,3 +45,12 @@ class ChartTests(unittest.TestCase):
                          (None,None,None))
         self.assertEqual(_observed_time({'status':'success','first_complete_observed_ms':0,
                                         'last_generating_observed_ms':0}),(0,0,'0.0–0.0'))
+
+    def test_all_missing_time_has_explanation_not_fake_zero_to_one_axis(self):
+        import importlib.util
+        if not importlib.util.find_spec('reportlab'):self.skipTest('reportlab not installed')
+        from benchmark.charts import _panel
+        drawing=_panel(['a'],{'monogpt':{'a':{'time':None}}},'time','Helvetica')
+        labels=[getattr(s,'text','') for s in drawing.contents]
+        self.assertTrue(any('시간 측정 미완료' in s for s in labels))
+        self.assertNotIn('0.25',labels)

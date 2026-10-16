@@ -1,0 +1,56 @@
+# 새 세션에서도 유지할 실행 정책
+
+## 추론 불일치: 자동 참고 비교 또는 한 번 확인
+
+기본 config의 `reasoning_mismatch_policy`는 `auto_exploratory`입니다. 이는 승인된 테스트 범위 안에서 **추론만** 다르거나 미노출인 경우 참고 비교로 계속하는 정책이며 실행 허가·결제 허가 자체가 아닙니다. 시작 프롬프트에 이 동작을 알리고 실행 설정을 `local/`에 저장합니다. 사용자가 엄격 비교만 원하면 `ask`로 바꿉니다. 이전 실행의 계정별 승인·설정은 공용 Git으로 전달하지 않습니다.
+
+1. 같은 모델/버전·질문·첨부·검색 등 기타 설정을 먼저 확인합니다. 동일 모델을 못 찾으면 임의 모델 대체는 하지 않습니다.
+2. 같은 추론 설정을 선택할 수 있으면 엄격 비교를 합니다.
+3. 추론만 다르면 `auto_exploratory`에서는 재질문 없이 가능한 낮은/기본 단계로 참고 비교를 합니다. 사용자가 이미 지정한 사이트별 설정이 있으면 그것을 우선합니다. `ask`/의도 불명확일 때는 “이 모델은 A의 기본(미공개), B의 보통으로 참고 비교할까요?”처럼 실제 조건을 한 번 확인합니다. 응답 대기 중 다른 확정 모델은 진행할 수 있습니다.
+4. 질문 없이 Gemini를 빼고 최종 완료라고 보고하지 않습니다. 거절/미응답이면 확인 대기/제외 사유를 명시합니다. ChatGPT의 미지원 모델은 모델 없음입니다.
+
+`init --config local/실행설정.json`은 정책을 실행 기록에 고정합니다. 참고 비교의 reserve에는 같은 정규화 `model`/`model_group`, 사이트별 `reasoning`, `comparison_tier:"exploratory"`, 구체적 `mismatch_note`와 기존 `authorization_scope`를 기록합니다. `ask` 정책이면 실제 답변을 `mismatch_authorization`에도 적습니다. 정책은 추론 차이만 허용하며 프롬프트/첨부/기타 설정 차이는 허용하지 않습니다.
+
+브라우저 배치의 preflight에는 다음을 실제 확인 근거로 입력합니다. 코드가 UI를 대신 검증하지 않습니다.
+
+```js
+const preflight = {
+  uiVerified: true, conditionsMatch: false,
+  sameModelVerified: true, sameInputVerified: true, otherSettingsMatch: true,
+  reasoningMismatchPolicy: 'auto_exploratory',
+  mismatchNote: '현재 UI에서 확인한 서비스별 추론값과 불일치 이유',
+  authorizationScope: '이번 사용자가 승인한 모델·질문·요청 범위',
+  maxTotalRequests: 40,
+};
+```
+
+`browser/batch.mjs`의 `resolveComparison`이 이 조건에서만 참고 비교를 선택합니다. 명시적 확인을 받은 경우 기존 `comparisonMode:'exploratory', userAuthorizedMismatch:true` 경로도 사용 가능합니다. 참고 결과는 비용·품질·시간 그래프와 별도 표시된 요약으로 내며 엄격 비교 평균과 합산하지 않습니다.
+
+## 시간: 전송부터 완료까지 외부에서 측정
+
+사이트에 소요시간 UI가 없어도 측정합니다. 도구가 지원하는 시계를 전송 직전과 완료 확인 직후에 읽습니다. UI 업로드/메뉴 설정은 전송 전에 끝냅니다. 정밀 내부 추론 시간이 아니라 자동화 관측 상한/구간임을 표시합니다.
+
+권장 경로는 `browser/observe.mjs`입니다. 사용 중인 도구 문서가 이 보조 모듈 API를 지원하는지 먼저 확인합니다. 미지원이면 현재 도구의 클릭·스냅샷과 외부 시계로 같은 필드를 기록하며, 보조 모듈 사용 불가를 시간 측정 포기의 이유로 삼지 않습니다.
+
+```js
+const state = await sendOnce({tab, service, prompt, textboxName, persist,
+  reservationId: requestId, uiVerified: true});
+await observeWindow({tab, state, persist, windowMs: 20000});
+// still_observing이면 같은 state로 관측 창만 이어 실행. sendOnce 재호출 금지.
+// 완료 후 답변·비용 결과에 시간 필드를 마지막에 병합해 record --event로 저장:
+const result = {kind:'result', request_id:requestId, status:'success',
+  answer:verifiedAnswer, cost_status:verifiedCostStatus, cost:verifiedCost,
+  ...timingResult(state)};
+```
+
+- sendOnce는 유료 클릭 전에 예약과 시계 기준을 영속 저장합니다. 완료 신호 확인 **이후**의 시간을 저장합니다. 카멜 표기 관측값에서 보고서의 `first_complete_observed_ms`/`last_generating_observed_ms`로 자동 변환합니다.
+- runCase는 한 사이트 전송 직후 관측하고, 아직 생성 중이면 상태를 반환합니다. 같은 case/results/preflight에 `resume:true`로 재개하면 기존 요청의 관측만 이어간 뒤 아직 보내지 않은 사이트로 진행합니다. 완료된 요청은 다시 보내지 않으며 전송 여부 불확실이면 먼저 화면·사용량을 대조합니다. 영속 결과에서 상태를 복원하고 60초 안에 사용자에게 진행 상황을 알립니다.
+- 마지막 생성 중 시각을 못 봐도 첫 완료 상한은 유효합니다. `last_generating_observed_ms:null`, `first_complete_observed_ms:N`으로 기록해 `≤N초`로 표시합니다.
+- 세션이 재시작되면 저장된 절대 시각을 사용한 관측임을 `timing_method`에 표시합니다. 시계 변경/음수/전송 불확정은 원기록 대조 대상이며 정확한 시간으로 위장하지 않습니다.
+- 첫 실제 요청 뒤 `status`의 `timing_missing_do_not_resend`가 비어 있는지 확인합니다. 파일 생성 성공과 측정 성공을 구분합니다. 첫 요청도 계획 횟수에 포함하며 추가 유료 파일럿을 만들지 않습니다.
+- 시간이 누락돼도 답변·비용을 버리거나 전체 실행을 막지 않습니다. 원기록이 있으면 근거를 보존해 정정하고, 없으면 `timing_unavailable_reason`을 남깁니다. 시간을 채우려고 유료 요청을 재전송하지 않습니다. **다음 요청의 시계 경로를 고친 뒤 계속**합니다.
+- `report` 반환값의 `timing_missing`와 보고서 첫 요약의 누락 건수를 검토합니다. 한 건이라도 누락이면 그 범위를 밝히며 전체 시간 실측 완료라고 하지 않습니다. 전부 누락이면 빈 0~1초 축 대신 측정 미완료 안내가 표시됩니다.
+
+## 완료 점검
+
+예정 모델별 실행/미실행 사유, 시간 관측 건수/성공 답변 수, 비용 관측 여부를 각각 보고합니다. 형식 테스트 통과를 실제 UI 실측 통과로 바꾸어 말하지 않습니다. 실제 데이터·원본·계정은 Git에 올리지 않습니다.

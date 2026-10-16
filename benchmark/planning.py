@@ -77,6 +77,9 @@ def model_cases(model, cases):
 
 def build_plan(root, config_path="config/benchmark.json"):
     config = read_json(root, config_path)
+    mismatch_policy = config.get('reasoning_mismatch_policy', 'ask')
+    if mismatch_policy not in {'ask', 'auto_exploratory'}:
+        raise ValueError('reasoning_mismatch_policy: ask 또는 auto_exploratory')
     if config.get("schema_version") != 1:
         raise ValueError("지원하지 않는 설정 버전")
     case_doc = read_json(root, config["case_file"])
@@ -178,6 +181,8 @@ def build_plan(root, config_path="config/benchmark.json"):
                 blockers.append(service + "/" + case["id"] + ": 요구 기능 미확인")
     for model in models:
         signatures = []
+        base_signatures = []
+        unknown_reasoning = False
         evidence = []
         for service, profile in profiles.items():
             if service not in groups[model["id"]]:
@@ -190,14 +195,22 @@ def build_plan(root, config_path="config/benchmark.json"):
                                and (reasoning["budget_tokens"] is None or
                                     (type(reasoning["budget_tokens"]) is int and reasoning["budget_tokens"] >= 0)))
             feature_settings = resolved.get("feature_settings")
+            recorded_unknown = (isinstance(reasoning, dict)
+                                and set(reasoning) == {'mode', 'level', 'budget_tokens'}
+                                and all(isinstance(reasoning.get(k), str) and reasoning[k].strip() for k in ('mode', 'level'))
+                                and (reasoning['budget_tokens'] is None or
+                                     (type(reasoning['budget_tokens']) is int and reasoning['budget_tokens'] >= 0)))
+            allow_unknown = mismatch_policy == 'auto_exploratory' and recorded_unknown
             if (resolved.get("verified") is not True
                     or not known(resolved.get("canonical_model")) or not known(resolved.get("version"))
-                    or not valid_reasoning or not isinstance(feature_settings, dict)
+                    or (not valid_reasoning and not allow_unknown) or not isinstance(feature_settings, dict)
                     or not feature_settings or not known(feature_settings)
                     or not resolved.get("evidence")
                     or resolved.get("evidence_scope") not in {"ui_declared", "provider_documented"}):
                 blockers.append(service + "/" + model["id"] + ": 모델·버전·추론·설정 근거 미확인")
             else:
+                unknown_reasoning |= not valid_reasoning
+                base_signatures.append(digest({k: resolved[k] for k in ('canonical_model', 'version', 'feature_settings')}))
                 signatures.append(digest({k: resolved[k] for k in
                                           ("canonical_model", "version", "reasoning", "feature_settings")}))
                 evidence.append({"service": service, "scope": resolved["evidence_scope"],
@@ -210,14 +223,20 @@ def build_plan(root, config_path="config/benchmark.json"):
                 cost_complete[service] = False
             else:
                 estimated_cost[service] += max_cost * counts[model["id"]]
-        if len(set(signatures)) > 1:
+        matched = (len(signatures) == len(groups[model['id']]) and len(set(signatures)) == 1 and not unknown_reasoning)
+        exploratory = (not matched and mismatch_policy == 'auto_exploratory'
+                       and len(base_signatures) == len(groups[model['id']]) and len(set(base_signatures)) == 1)
+        if exploratory:
+            warnings.append(model['id'] + ': 추론 차이/미공개 — 승인된 실행 범위에서 참고 비교로 진행; 엄격 평균에 합산 금지')
+        elif len(set(signatures)) > 1:
             blockers.append(model["id"] + ": 사이트 간 모델·버전·추론·설정 불일치")
         comparison_groups.append({"candidate_id": model["id"], "requested_name": model["requested_name"],
                                   "case_ids": [c["id"] for c in selections[model["id"]]],
                                   "requests_planned": counts[model["id"]] * len(groups[model["id"]]),
                                   "services": groups[model["id"]],
                                   "excluded_services": exclusions[model["id"]],
-                                  "conditions_match": len(signatures) == len(groups[model["id"]]) and len(set(signatures)) == 1,
+                                  "conditions_match": matched,
+                                  "comparison_mode": 'ui_matched' if matched else 'exploratory' if exploratory else 'confirmation_or_evidence_required',
                                   "evidence": evidence})
     for service in services:
         if budget is not None and estimated_cost[service] > budget:

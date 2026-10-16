@@ -89,6 +89,10 @@ def _panel(cases, services, metric, font, height=185):
                "time": "질문별 소요시간 (초 · 완료 관측 상한/구간)"}[metric]
     drawing.add(String(left, height - 16, heading, fontName=font, fontSize=11, fillColor=colors.HexColor("#233C5A")))
     values = [series.get(case, {}).get(metric) for series in services.values() for case in cases]
+    if metric == "time" and not any(v is not None for v in values):
+        drawing.add(String(left, height / 2, "시간 측정 미완료 — 전송·완료 관측 기록이 없어 그래프를 그릴 수 없습니다.",
+                           fontName=font, fontSize=11, fillColor=colors.HexColor("#A33B28")))
+        return drawing
     ceiling = 20 if metric == "quality" else _cost_ceiling(values)
     for tick in range(5):
         value = ceiling * tick / 4
@@ -205,7 +209,7 @@ def write_chart_pdf(path, rows, today, name, rates, doc=None):
         for s in summaries(g, rates):
             overview.append([g['label'], SERVICE_NAMES.get(s['service'],s['service']), s['n'],
                              s['quality'], s['cost'], s['time']])
-    story.extend([Spacer(1, 12), para("동일 조건·공통 질문 교집합 요약 (파일 생성 제외, 속도 순위 아님)"),
+    story.extend([Spacer(1, 12), para("공통 질문 교집합 요약 (파일 생성 제외, 참고 비교는 별도 표시·엄격 비교와 합산하지 않음)"),
                   table(overview, [140, 115, 65, 140, 140, 160])])
     warnings = assessment_warnings(rows)
     for warning in warnings[:3]:
@@ -260,7 +264,8 @@ def write_chart_pdf(path, rows, today, name, rates, doc=None):
                     point = series.get(case, {})
                     cost = krw_text(point['cost']) if point.get('cost') is not None else '비용 미확인'
                     quality = str(point['quality']) + '/20' if point.get('quality') is not None else '품질 미평가'
-                    values.append(f"{cost} · {quality} · {point.get('time_label') or '시간 미관측'}초")
+                    time = point['time_label'] + '초' if point.get('time_label') else '시간 미관측'
+                    values.append(f"{cost} · {quality} · {time}")
                 matrix.append(values)
             story.append(table(matrix, [100] + [660 / len(services)] * len(services)))
             story.extend([Spacer(1, 8), para("시간 선의 점은 완료를 처음 확인한 상한입니다. 관측 구간이 겹치거나 넓으면 빠르다고 판정하지 않습니다. 파일 생성은 아래 별도 기능 결과에 포함합니다.")])

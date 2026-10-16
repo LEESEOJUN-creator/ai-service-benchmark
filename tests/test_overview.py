@@ -50,3 +50,18 @@ class OverviewTests(unittest.TestCase):
         groups=report_groups([item],self.doc())
         self.assertEqual(len(groups),2)
         self.assertEqual(len(groups[0]['rows']),1)
+
+    def test_time_missing_is_front_page_warning_and_coverage_not_silent(self):
+        item=row('monogpt')
+        item['result'].pop('first_complete_observed_ms')
+        self.assertTrue(any('시간 측정 미완료' in s for s in assessment_warnings([item])))
+        self.assertIn('시간 측정 미완료',coverage_text(report_groups([item],self.doc())[0]))
+
+    def test_exploratory_summary_is_present_but_explicitly_separate(self):
+        rows=[row('monogpt'),row('timely')]
+        for r in rows:r['request']['comparison_tier']='exploratory'
+        data=summaries(report_groups(rows,self.doc())[0],normalize_rates({'monogpt':1,'timely':2}))
+        self.assertEqual([s['n'] for s in data],[1,1])
+        self.assertTrue(all('(참고)' in s['quality'] for s in data))
+        rows[1]['request']['comparison_tier']='ui_matched'
+        self.assertEqual(summaries(report_groups(rows,self.doc())[0],normalize_rates({'monogpt':1,'timely':2}))[0]['n'],0)
