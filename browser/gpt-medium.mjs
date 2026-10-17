@@ -1,45 +1,45 @@
-/** Observed Korean-UI recipe; invoke only after current UI selector validation. */
-export async function prepareGPTMedium(service, tab, wrapper) {
-  const pw=tab.playwright;
+import {checkedUI, hasControl} from './ui-actions.mjs';
+
+/** Observed Korean-UI recipe, guarded but not verified across all live accounts.
+ * Fourth argument: live readUrl and verifyReady(snapshot) callbacks, derived
+ * from the connected tool and CURRENT UI, not a constant URL/true fallback.
+ */
+export async function prepareGPTMedium(service, tab, wrapper, {readUrl,verifyReady} = {}) {
+  if(typeof verifyReady!=='function') throw Error('UI_CONTRACT: current UI model/reasoning readiness check required');
+  const ui=checkedUI(tab,service,readUrl);
+  const button=name=>s=>hasControl(s,'button',name);
   if(service==='monogpt') {
-    await pw.getByRole('button',{name:'새 채팅 ⌘⇧O',exact:true}).click();
-    let snap=await pw.domSnapshot();
-    if(!snap.includes('button "GPT-6 Sol"')) throw new Error('Re-select GPT-6 Sol in current model menu');
-    await pw.getByRole('button',{name:'옵션 열기',exact:true}).click();
-    snap=await pw.domSnapshot();
-    if(snap.includes('button "심층분석 꺼짐"')) await pw.getByRole('button',{name:'심층분석 꺼짐',exact:true}).click();
-    if(snap.includes('button "검색 켜짐"')) await pw.getByRole('button',{name:'검색 켜짐',exact:true}).click();
-    snap=await pw.domSnapshot();
-    if(!snap.includes('button "보통"')) throw new Error('Reasoning menu changed');
-    await pw.getByRole('button',{name:'보통',exact:true}).click();
-    return pw.domSnapshot();
+    let snap=await ui.click('button','새 채팅 ⌘⇧O',button('옵션 열기'));
+    if(!button('GPT-6 Sol')(snap)) throw new Error('Re-select GPT-6 Sol in current model menu');
+    snap=await ui.click('button','옵션 열기',s=>button('심층분석 꺼짐')(s)||button('보통')(s));
+    if(button('심층분석 꺼짐')(snap)) snap=await ui.click('button','심층분석 꺼짐',button('보통'));
+    if(button('검색 켜짐')(snap)) snap=await ui.click('button','검색 켜짐',button('검색 꺼짐'));
+    if(!button('보통')(snap)) throw new Error('Reasoning menu changed');
+    return ui.click('button','보통',verifyReady);
   }
   if(service==='timely') {
-    await pw.getByRole('button',{name:'new chat button',exact:true}).click();
-    await pw.waitForURL('https://timelyai.io/timely/chat',{timeoutMs:10000});
-    await pw.domSnapshot();
-    await pw.getByRole('button',{name:'model menu button',exact:true}).click();
-    let snap=await pw.domSnapshot();
-    if(!snap.includes('button "GPT-6 Sol"')) throw new Error('Model no longer offered');
-    await pw.getByRole('button',{name:'GPT-6 Sol',exact:true}).click();
-    snap=await pw.domSnapshot();
+    await ui.click('button','new chat button',button('model menu button'));
+    await ui.click('button','model menu button',button('GPT-6 Sol'));
+    const snap=await ui.click('button','GPT-6 Sol',verifyReady);
     if(!snap.includes('generic: 보통')) throw new Error('Set medium explicitly before send');
     return snap;
   }
   if(service==='chatgpt') {
-    await pw.getByRole('button',{name:'새 채팅',exact:true}).click();
-    await pw.waitForURL('https://chatgpt.com/',{timeoutMs:10000});
-    let snap=await pw.domSnapshot();
-    if(!snap.includes('button "Work" [pressed]')) throw new Error('Work mode must be selected');
-    await pw.getByRole('button',{name:'ChatGPT 모델 선택',exact:true}).click();
-    await pw.domSnapshot();
-    await pw.getByRole('menuitem',{name:'모델 선택',exact:true}).click();
-    await pw.domSnapshot();
-    await pw.getByRole('menuitemradio').filter({hasText:/^GPT-6 Sol$/}).click();
-    snap=await pw.domSnapshot();
+    if(typeof wrapper?.pressKey !== 'function') throw Error('Supported Escape action required');
+    await ui.click('button','새 채팅',s=>hasControl(s,'button','Work','pressed')&&button('ChatGPT 모델 선택')(s));
+    await ui.click('button','ChatGPT 모델 선택',s=>hasControl(s,'menuitem','모델 선택'));
+    await ui.click('menuitem','모델 선택',s=>hasControl(s,'menuitemradio','GPT-6 Sol'));
+    const snap=await ui.click('menuitemradio','GPT-6 Sol',verifyReady);
     if(!snap.includes('status: Medium,')) throw new Error('Set Medium explicitly before send');
-    await wrapper.pressKey(null,'Escape');
-    return pw.domSnapshot();
+    // Some UI versions close the menu on selection. Do not blindly toggle it.
+    if(hasControl(snap,'menuitemradio','GPT-6 Sol')) {
+      await ui.snapshot(); // live URL check before keyboard action
+      await wrapper.pressKey(null,'Escape');
+    }
+    const ready=await ui.snapshot();
+    if(hasControl(ready,'menuitemradio','GPT-6 Sol') || !ready.includes('status: Medium,') || await verifyReady(ready)!==true)
+      throw Error('Composer not ready; inspect current UI, do not guess another click');
+    return ready;
   }
   throw new Error('Unknown service');
 }

@@ -30,6 +30,16 @@ const preflight = {
 
 `browser/batch.mjs`의 `resolveComparison`이 이 조건에서만 참고 비교를 선택합니다. 명시적 확인을 받은 경우 기존 `comparisonMode:'exploratory', userAuthorizedMismatch:true` 경로도 사용 가능합니다. 참고 결과는 비용·품질·시간 그래프와 별도 표시된 요약으로 내며 엄격 비교 평균과 합산하지 않습니다.
 
+## 선택적 Playwright 준비 단계의 클릭 보호
+
+기본 실행은 [공통 브라우저 흐름](BROWSER-FLOW.md)의 관측 → 한 번 조작 → 결과 확인을 따른다. 지원되는 Playwright 도구를 쓰는 경우 `browser/ui-actions.mjs`의 `checkedUI(tab, service, readUrl)`로 준비 단계 클릭을 보호할 수 있다. `readUrl`은 **연결 도구 문서가 제공하는 현재 탭 URL 읽기**에 연결한다. 고정 URL을 반환하거나 지원하지 않는 API를 만들어 쓰지 않는다.
+
+`ui.click(role, exactName, verifyAfter)`는 새 화면과 URL, 정확한 역할/이름, 대상 1개·가시성·활성 상태를 확인하고 딱 한 번 클릭한다. 새 화면으로 `verifyAfter(after, before)`가 `true`를 반환해야 다음 단계로 간다. 검증 실패/타임아웃 후 같은 흐름의 추가 클릭은 막는다. 현재 상태와 전송 여부를 대조해 복구한 후에만 새 흐름을 만든다. 검증 함수는 메뉴가 열림/선택값이 바뀜 등 **현재 UI 근거**를 검사해야 하며 무조건 `true`로 우회하면 안 된다. 비동기 렌더링 때문에 확인에 실패하면 관측만 이어가고 클릭부터 재실행하지 않는다.
+
+`prepareGPTMedium(service, tab, wrapper, {readUrl, verifyReady})`도 이 보호를 사용한다. `verifyReady(snapshot)`는 현재 UI의 선택된 정확한 모델·추론 상태를 검사하는 함수다. 임의로 `[pressed]`나 `[checked]`가 있을 것이라고 가정하지 않는다. 이 두 콜백 없이 실행하면 조작 전에 오류를 반환한다. 메뉴가 달라졌으면 이 과거 한국어 UI 레시피를 강제로 실행하지 말고 공통 흐름으로 현재 화면부터 확인한다.
+
+다른 모델의 기존 `claude-low.mjs`/`gemini-exploratory.mjs`는 과거 UI 참고 레시피이며 자동 보호가 주입된 드라이버가 아니다. 그대로 무관측 일괄 실행하지 않는다. 공통 흐름에 따라 한 단계씩 실행하거나 현재 UI에서 검증한 전후 조건을 `checkedUI`에 연결한다. 이 보조 코드는 유료 전송·업로드·계정 전체 설정·연결 복구를 수행하지 않으며, 해당 단계의 공통 체크리스트를 대체하지 않는다. 지원 API가 다르면 새 드라이버를 만들기보다 기본 도구로 같은 확인 절차를 따른다.
+
 ## 선택적 Playwright 시간 측정
 
 사이트에 소요시간 UI가 없어도 측정합니다. 도구가 지원하는 시계를 전송 직전과 완료 확인 직후에 읽습니다. UI 업로드/메뉴 설정은 전송 전에 끝냅니다. 정밀 내부 추론 시간이 아니라 자동화 관측 상한/구간임을 표시합니다.
